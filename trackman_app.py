@@ -214,7 +214,9 @@ COLUMN_ALIASES = {
     "Pitcher":         ["PitcherName", "ThrowerName"],
 }
  
-WARMUP_VALUES = {"warmup", "undefined", "", "nan"}
+# Only these explicit strings are treated as warmup/junk — NOT blank/NaN
+# NaN Batter rows are valid pitches where the batter wasn't recorded
+WARMUP_VALUES = {"warmup", "undefined"}
  
  
 def smart_map_columns(df: pd.DataFrame) -> pd.DataFrame:
@@ -262,19 +264,23 @@ def load_and_clean(files) -> pd.DataFrame:
         st.warning("⚠️ No 'Date' column found — date filtering will be unavailable.")
         df["Date"] = pd.NaT
  
-    # Normalise PitchCall and Batter for warmup filtering
-    for col in ["PitchCall", "Batter"]:
-        if col in df.columns:
-            df[col] = df[col].astype(str).str.strip()
- 
-    # Remove warmup / undefined rows (check both PitchCall and Batter)
-    def is_warmup_row(row):
-        pc = str(row.get("PitchCall", "")).lower()
-        ba = str(row.get("Batter", "")).lower()
-        return pc in WARMUP_VALUES or ba in WARMUP_VALUES
- 
+    # ---- Warmup filter ----
+    # IMPORTANT: Only drop rows where PitchCall or Batter is an EXPLICIT warmup
+    # string ("warmup", "undefined"). NaN / blank Batter values are NOT warmups —
+    # they are valid pitches with missing batter info and must be kept.
     before = len(df)
-    df = df[~df.apply(is_warmup_row, axis=1)].reset_index(drop=True)
+    warmup_mask = pd.Series(False, index=df.index)
+ 
+    if "PitchCall" in df.columns:
+        pc_lower = df["PitchCall"].fillna("").astype(str).str.strip().str.lower()
+        warmup_mask |= pc_lower.isin(WARMUP_VALUES)
+ 
+    if "Batter" in df.columns:
+        ba_lower = df["Batter"].fillna("").astype(str).str.strip().str.lower()
+        # Only flag explicit "warmup"/"undefined" — NOT empty strings (missing batter is valid)
+        warmup_mask |= ba_lower.isin(WARMUP_VALUES)
+ 
+    df = df[~warmup_mask].reset_index(drop=True)
     removed = before - len(df)
     if removed:
         st.sidebar.caption(f"🧹 Removed {removed:,} warmup / undefined rows.")
