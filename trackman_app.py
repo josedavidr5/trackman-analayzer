@@ -543,147 +543,7 @@ def plot_player_stadium_trend(df, player_name, player_col, metric_col, metric_na
     cht(ax,f"{metric_name} by Stadium",sub=player_name)
     fig.tight_layout(pad=1.2); return fig
 
-# ══════════════════════════════════════════════════════════════════════════════
-# UMPIRE / STRIKE-ZONE ANALYSIS
-# ══════════════════════════════════════════════════════════════════════════════
-def _in_zone(row):
-    """True if pitch was geometrically inside the strike zone."""
-    try:
-        return (-0.71<=row["PlateLocSide"]<=0.71 and 1.5<=row["PlateLocHeight"]<=3.5)
-    except Exception:
-        return False
 
-def build_ump_accuracy(df):
-    """
-    Per-umpire accuracy table.
-    Requires PitchCall + PlateLocSide/Height columns.
-    """
-    needed={"PitchCall","PlateLocSide","PlateLocHeight"}
-    if not needed.issubset(df.columns): return pd.DataFrame()
-    loc=df.dropna(subset=["PlateLocSide","PlateLocHeight","PitchCall"]).copy()
-    loc["InZone"]=loc.apply(_in_zone,axis=1)
-    loc["CalledStrike"]=loc["PitchCall"].astype(str).str.lower()=="strikecalled"
-    loc["CalledBall"]  =loc["PitchCall"].astype(str).str.lower()=="ballcalled"
-    ump_col="Umpire" if "Umpire" in df.columns else None
-    if ump_col:
-        rows=[]
-        for ump,grp in loc.groupby(ump_col):
-            n=len(grp)
-            if n<30: continue
-            in_z=grp["InZone"]; out_z=~in_z
-            cs=grp["CalledStrike"]; cb=grp["CalledBall"]
-            # Missed calls
-            ball_called_in_zone =(in_z  & cb).sum()   # should-be strike called ball
-            strike_called_out   =(out_z & cs).sum()   # should-be ball called strike
-            correct=(n - ball_called_in_zone - strike_called_out)
-            rows.append({
-                "Umpire":ump,"Pitches":n,
-                "Accuracy %":safe_pct(correct,n),
-                "Ball→Strike":strike_called_out,  # favour batter
-                "Strike→Ball":ball_called_in_zone, # favour pitcher
-                "Net Bias":strike_called_out-ball_called_in_zone,
-            })
-        return (pd.DataFrame(rows)
-                .sort_values("Accuracy %",ascending=False)
-                .reset_index(drop=True))
-    else:
-        # Aggregate across whole dataset
-        in_z=loc["InZone"]; out_z=~in_z
-        cs=loc["CalledStrike"]; cb=loc["CalledBall"]
-        ball_called_in_zone=(in_z&cb).sum()
-        strike_called_out  =(out_z&cs).sum()
-        correct=len(loc)-ball_called_in_zone-strike_called_out
-        return pd.DataFrame([{
-            "Umpire":"(All)","Pitches":len(loc),
-            "Accuracy %":safe_pct(correct,len(loc)),
-            "Ball→Strike":strike_called_out,
-            "Strike→Ball":ball_called_in_zone,
-            "Net Bias":strike_called_out-ball_called_in_zone,
-        }])
-
-def plot_called_zone(df, call_type="strike", title_suffix=""):
-    """
-    Heatmap of called strikes (if call_type='strike') or called balls
-    inside the zone (call_type='ball') — shows umpire tendencies.
-    """
-    needed={"PitchCall","PlateLocSide","PlateLocHeight"}
-    fig,ax=plt.subplots(figsize=(5.2,5.8)); act(fig,[ax])
-    if not needed.issubset(df.columns):
-        ax.text(.5,.5,"No call data",ha="center",va="center",color=C_MUTE,transform=ax.transAxes)
-        cht(ax,f"Called {call_type.title()}s",sub=title_suffix); return fig
-    loc=df.dropna(subset=["PlateLocSide","PlateLocHeight","PitchCall"]).copy()
-    if call_type=="strike":
-        sub=loc[loc["PitchCall"].astype(str).str.lower()=="strikecalled"]
-        cmap="Reds"; label="Called Strikes"
-    else:
-        loc["InZone"]=loc.apply(_in_zone,axis=1)
-        sub=loc[(loc["PitchCall"].astype(str).str.lower()=="ballcalled")&loc["InZone"]]
-        cmap="Blues"; label="Balls Called In Zone"
-    if len(sub)>=5:
-        try:
-            sns.kdeplot(data=sub,x="PlateLocSide",y="PlateLocHeight",
-                        fill=True,cmap=cmap,alpha=0.78,levels=12,thresh=0.04,ax=ax)
-        except Exception: pass
-        ax.scatter(sub["PlateLocSide"],sub["PlateLocHeight"],
-                   color=RED if call_type=="strike" else BLUE,
-                   alpha=0.25,s=12,edgecolors="none",zorder=4)
-    else:
-        ax.text(.5,.5,f"Not enough calls\n(need ≥ 5)",ha="center",va="center",
-                color=C_MUTE,transform=ax.transAxes)
-    draw_sz(ax); draw_plate(ax)
-    ax.set_xlim(-2.5,2.5); ax.set_ylim(0.3,5.0)
-    ax.set_xlabel("Plate Side (ft)"); ax.set_ylabel("Height (ft)")
-    cht(ax,label,sub=title_suffix)
-    ax.set_aspect("equal",adjustable="box")
-    fig.tight_layout(pad=1.2); return fig
-
-def plot_edge_accuracy(df, ump_name=None):
-    """
-    Scatter of called strikes (green) and called balls (red) in the edge zone
-    (within 0.15 ft of zone boundary), coloured by correct/incorrect call.
-    """
-    needed={"PitchCall","PlateLocSide","PlateLocHeight"}
-    fig,ax=plt.subplots(figsize=(5.2,5.8)); act(fig,[ax])
-    if not needed.issubset(df.columns):
-        ax.text(.5,.5,"No data",ha="center",va="center",color=C_MUTE,transform=ax.transAxes)
-        return fig
-    sub=df.dropna(subset=["PlateLocSide","PlateLocHeight","PitchCall"]).copy()
-    if ump_name and "Umpire" in sub.columns:
-        sub=sub[sub["Umpire"]==ump_name]
-    sub["InZone"]=sub.apply(_in_zone,axis=1)
-    EDGE=0.20
-    def is_edge(r):
-        x,y=r["PlateLocSide"],r["PlateLocHeight"]
-        return (abs(abs(x)-0.71)<EDGE or abs(y-1.5)<EDGE or abs(y-3.5)<EDGE)
-    sub["Edge"]=sub.apply(is_edge,axis=1)
-    edge=sub[sub["Edge"]]
-    if edge.empty:
-        ax.text(.5,.5,"No edge pitches",ha="center",va="center",color=C_MUTE,transform=ax.transAxes)
-    else:
-        edge=edge.copy()
-        edge["CS"]=edge["PitchCall"].astype(str).str.lower()=="strikecalled"
-        edge["CB"]=edge["PitchCall"].astype(str).str.lower()=="ballcalled"
-        # Correct calls
-        correct_s=edge[edge["InZone"]&edge["CS"]]
-        correct_b=edge[~edge["InZone"]&edge["CB"]]
-        # Wrong calls
-        wrong_s=edge[~edge["InZone"]&edge["CS"]]   # strike outside zone
-        wrong_b=edge[edge["InZone"]&edge["CB"]]    # ball inside zone
-        for pts,c,m,lbl,zo in [
-            (correct_s,GREEN,"o","✓ Strike",5),(correct_b,BLUE,"o","✓ Ball",5),
-            (wrong_s,RED,"X","✗ Phantom K",7),(wrong_b,ORANGE,"X","✗ Missed K",7),
-        ]:
-            if len(pts):
-                ax.scatter(pts["PlateLocSide"],pts["PlateLocHeight"],
-                           color=c,marker=m,s=28,alpha=0.75,label=f"{lbl} ({len(pts)})",zorder=zo)
-    draw_sz(ax); draw_plate(ax)
-    ax.set_xlim(-2.5,2.5); ax.set_ylim(0.3,5.0)
-    ax.set_xlabel("Plate Side (ft)"); ax.set_ylabel("Height (ft)")
-    title=f"Edge Calls — {ump_name}" if ump_name else "Edge Call Accuracy"
-    cht(ax,title)
-    ax.legend(fontsize=7,framealpha=0.4,facecolor=C_CARD,labelcolor=C_TEXT)
-    ax.set_aspect("equal",adjustable="box")
-    fig.tight_layout(pad=1.2); return fig
 
 # ══════════════════════════════════════════════════════════════════════════════
 # PITCHING ANALYTICS
@@ -1046,7 +906,6 @@ def plot_ev_la_scatter(df,name):
     else:
         ax.scatter(sub["ExitSpeed"],sub["Angle"],color=BLUE,alpha=0.50,s=20,edgecolors="none",zorder=4)
     # Barrel zone box
-    ax.add_patch(patches.FancyArrowPatch)  # skip — draw rectangle directly
     ax.add_patch(patches.Rectangle((98,8),20,24,lw=1.5,edgecolor=ACCENT,
                                    facecolor=ACCENT,alpha=0.07,linestyle="--",zorder=2))
     ax.text(108.5,20,"Barrel\nZone",ha="center",va="center",color=ACCENT,fontsize=7.5,fontweight="bold",alpha=0.7)
@@ -1487,78 +1346,6 @@ def render_hitting(df, master_df):
     for f in [fig_spray,fig_dmg,fig_ev,fig_la,fig_ev_la,fig_roll]: plt.close(f)
 
 # ══════════════════════════════════════════════════════════════════════════════
-# RENDER: UMPIRE DASHBOARD
-# ══════════════════════════════════════════════════════════════════════════════
-def render_umpire(df):
-    st.markdown('<div class="sh">🧑‍⚖️ Umpire / Strike Zone Analysis</div>',unsafe_allow_html=True)
-    needed={"PitchCall","PlateLocSide","PlateLocHeight"}
-    if not needed.issubset(df.columns):
-        st.error("Requires PitchCall, PlateLocSide, and PlateLocHeight columns."); return
-
-    has_ump="Umpire" in df.columns and df["Umpire"].notna().any()
-    selected_ump=None
-    if has_ump:
-        umps=["(All)"]+sorted(df["Umpire"].dropna().unique().tolist())
-        c_u1,c_u2=st.columns([2,3])
-        with c_u1:
-            selected_ump=st.selectbox("Select Umpire",umps,key="sel_ump")
-        ump_df=df if selected_ump=="(All)" else df[df["Umpire"]==selected_ump]
-    else:
-        st.info("No 'Umpire' / 'UmpireName' column found — showing aggregate data.")
-        ump_df=df; selected_ump="(All)"
-
-    # Accuracy table
-    acc_df=build_ump_accuracy(ump_df)
-    if not acc_df.empty:
-        st.markdown('<div class="sh">📊 Call Accuracy</div>',unsafe_allow_html=True)
-        st.dataframe(acc_df,use_container_width=True,hide_index=True)
-        csv_dl(acc_df,"umpire_accuracy.csv")
-
-    tab_u1,tab_u2,tab_u3=st.tabs([
-        "📍 Called Zones","🎯 Edge Calls","📈 Accuracy by Umpire"])
-
-    with tab_u1:
-        st.markdown("**Called Strikes** (density = where umpire rang batters up) vs "
-                    "**Balls In Zone** (pitches inside zone called ball)")
-        cl,cr=st.columns(2)
-        title_sfx=selected_ump if selected_ump!="(All)" else "All Umpires"
-        fig_cs=plot_called_zone(ump_df,"strike",title_sfx)
-        fig_cb=plot_called_zone(ump_df,"ball",title_sfx)
-        with cl: st.pyplot(fig_cs,use_container_width=True)
-        with cr: st.pyplot(fig_cb,use_container_width=True)
-
-    with tab_u2:
-        st.markdown("**Edge pitches** (within 0.20 ft of zone boundary) — correct vs missed calls.")
-        fig_edge=plot_edge_accuracy(ump_df,selected_ump if selected_ump!="(All)" else None)
-        st.pyplot(fig_edge,use_container_width=True)
-        plt.close(fig_edge)
-
-    with tab_u3:
-        if has_ump:
-            full_acc=build_ump_accuracy(df)
-            if not full_acc.empty:
-                # Horizontal bar chart
-                fig_ubar,ax_u=plt.subplots(figsize=(9,max(3,len(full_acc)*0.42)))
-                act(fig_ubar,[ax_u])
-                colors=[GREEN if v>=full_acc["Accuracy %"].mean() else RED for v in full_acc["Accuracy %"]]
-                ax_u.barh(full_acc["Umpire"],full_acc["Accuracy %"],color=colors,
-                          alpha=0.82,edgecolor=C_SPINE,linewidth=0.4,zorder=3)
-                avg_acc=full_acc["Accuracy %"].mean()
-                ax_u.axvline(avg_acc,color=ACCENT,lw=1.8,linestyle="--",
-                             label=f"Avg {avg_acc:.1f}%",zorder=5)
-                for i,(val,ump) in enumerate(zip(full_acc["Accuracy %"],full_acc["Umpire"])):
-                    ax_u.text(val+0.1,i,f"{val:.1f}%",va="center",fontsize=7.5,color=C_TEXT)
-                ax_u.set_xlabel("Call Accuracy %"); ax_u.invert_yaxis()
-                cht(ax_u,"Umpire Call Accuracy Ranking")
-                ax_u.legend(fontsize=8,framealpha=0.4,facecolor=C_CARD,labelcolor=C_TEXT)
-                fig_ubar.tight_layout(pad=1.2)
-                st.pyplot(fig_ubar,use_container_width=True); plt.close(fig_ubar)
-        else:
-            st.info("Umpire column required for individual rankings.")
-
-    for f in [fig_cs,fig_cb]: plt.close(f)
-
-# ══════════════════════════════════════════════════════════════════════════════
 # RENDER: LEAGUE & STADIUM OVERVIEW
 # ══════════════════════════════════════════════════════════════════════════════
 def render_league(df):
@@ -1641,10 +1428,9 @@ def main():
         <div class="hero-sub">Advanced baseball data science platform — pitching · hitting · umpires · stadiums</div>
         <div class="hero-pills">
           <span class="pill">🔍 Player Search</span><span class="pill">🏟️ Stadium Trends</span>
-          <span class="pill">🧑‍⚖️ Umpire Analysis</span><span class="pill">📊 League Avg</span>
-          <span class="pill">🔄 vs RHP/LHP</span><span class="pill">🎯 Play Results</span>
-          <span class="pill">📦 EV×LA Quality</span><span class="pill">🏅 Park Factor</span>
-          <span class="pill">📄 Redesigned PDF</span>
+          <span class="pill">📊 League Avg</span><span class="pill">🔄 vs RHP/LHP</span>
+          <span class="pill">🎯 Play Results</span><span class="pill">📦 EV×LA Quality</span>
+          <span class="pill">🏅 Park Factor</span><span class="pill">📄 Redesigned PDF</span>
         </div>
       </div>
     </div>
@@ -1686,15 +1472,14 @@ def main():
 
     st.sidebar.markdown('<span class="sb-label">🎯 Dashboard Mode</span>',unsafe_allow_html=True)
     mode=st.sidebar.radio("mode",
-        ["⚾ Pitching","🏏 Hitting","🧑‍⚖️ Umpire / Strike Zone","📊 League & Stadiums"],
+        ["⚾ Pitching","🏏 Hitting","📊 League & Stadiums"],
         key="dash_mode",label_visibility="collapsed")
     st.sidebar.markdown("---")
     st.sidebar.caption("Built with ❤️ · Streamlit · Pandas · Matplotlib · Seaborn")
 
-    if   mode=="⚾ Pitching":                    render_pitching(filtered,master)
-    elif mode=="🏏 Hitting":                     render_hitting(filtered,master)
-    elif mode=="🧑‍⚖️ Umpire / Strike Zone":     render_umpire(filtered)
-    else:                                         render_league(filtered)
+    if   mode=="⚾ Pitching":       render_pitching(filtered,master)
+    elif mode=="🏏 Hitting":        render_hitting(filtered,master)
+    else:                            render_league(filtered)
 
 if __name__=="__main__":
     main()
