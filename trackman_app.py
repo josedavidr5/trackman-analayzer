@@ -998,31 +998,58 @@ def _pdf_table_page(pdf, df, title, subtitle=""):
     fig.tight_layout()
     pdf.savefig(fig,bbox_inches="tight",facecolor="#0d1117"); plt.close(fig)
 
+def _fig_to_img(src_fig):
+    """
+    Render a matplotlib figure to an RGBA numpy array via PNG buffer.
+    tostring_rgb() was removed in matplotlib 3.8+; this works on all versions.
+    """
+    import matplotlib.image as mpimg
+    img_buf = io.BytesIO()
+    src_fig.savefig(img_buf, format="png", dpi=110,
+                    bbox_inches="tight", facecolor=src_fig.get_facecolor())
+    img_buf.seek(0)
+    return mpimg.imread(img_buf)
+
 def _pdf_two_charts(pdf, fig1, fig2, label1="", label2=""):
     """Place two charts side-by-side on one PDF page."""
-    fig=plt.figure(figsize=(13,6)); fig.patch.set_facecolor("#0d1117")
-    gs=gridspec.GridSpec(1,2,figure=fig,wspace=0.08)
-    for slot,src_fig,lbl in [(0,fig1,label1),(1,fig2,label2)]:
-        ax_new=fig.add_subplot(gs[slot])
-        ax_new.set_facecolor("#0d1117"); ax_new.axis("off")
+    fig, axes = plt.subplots(1, 2, figsize=(13, 6))
+    fig.patch.set_facecolor("#0d1117")
+    for ax_new, src_fig, lbl in zip(axes, [fig1, fig2], [label1, label2]):
+        ax_new.set_facecolor("#0d1117")
+        ax_new.axis("off")
         if src_fig is not None:
-            src_canvas=src_fig.canvas; src_canvas.draw()
-            buf=np.frombuffer(src_canvas.tostring_rgb(),dtype=np.uint8)
-            buf=buf.reshape(src_fig.canvas.get_width_height()[::-1]+(3,))
-            ax_new.imshow(buf,aspect="auto")
-            if lbl: ax_new.set_title(lbl,color=CHART_MUTED_DARK,fontsize=9,pad=4)
-    pdf.savefig(fig,bbox_inches="tight",facecolor="#0d1117"); plt.close(fig)
+            try:
+                img = _fig_to_img(src_fig)
+                ax_new.imshow(img, aspect="auto")
+            except Exception:
+                ax_new.text(0.5, 0.5, "Chart unavailable",
+                            ha="center", va="center",
+                            color=CHART_MUTED_DARK, transform=ax_new.transAxes)
+        if lbl:
+            ax_new.set_title(lbl, color=CHART_MUTED_DARK, fontsize=9, pad=4)
+    fig.tight_layout(pad=0.5)
+    pdf.savefig(fig, bbox_inches="tight", facecolor="#0d1117")
+    plt.close(fig)
 
 def _pdf_single_chart(pdf, src_fig, label=""):
-    fig=plt.figure(figsize=(13,5.5)); fig.patch.set_facecolor("#0d1117")
-    ax=fig.add_subplot(111); ax.set_facecolor("#0d1117"); ax.axis("off")
+    """Place one chart centred on a PDF page."""
+    fig, ax = plt.subplots(figsize=(11, 5.5))
+    fig.patch.set_facecolor("#0d1117")
+    ax.set_facecolor("#0d1117")
+    ax.axis("off")
     if src_fig is not None:
-        src_fig.canvas.draw()
-        buf=np.frombuffer(src_fig.canvas.tostring_rgb(),dtype=np.uint8)
-        buf=buf.reshape(src_fig.canvas.get_width_height()[::-1]+(3,))
-        ax.imshow(buf,aspect="auto")
-        if label: ax.set_title(label,color=CHART_MUTED_DARK,fontsize=9,pad=4)
-    pdf.savefig(fig,bbox_inches="tight",facecolor="#0d1117"); plt.close(fig)
+        try:
+            img = _fig_to_img(src_fig)
+            ax.imshow(img, aspect="auto")
+        except Exception:
+            ax.text(0.5, 0.5, "Chart unavailable",
+                    ha="center", va="center",
+                    color=CHART_MUTED_DARK, transform=ax.transAxes)
+    if label:
+        ax.set_title(label, color=CHART_MUTED_DARK, fontsize=9, pad=4)
+    fig.tight_layout(pad=0.5)
+    pdf.savefig(fig, bbox_inches="tight", facecolor="#0d1117")
+    plt.close(fig)
 
 def export_pitching_pdf(pitcher, summary_df, disc_df, count_df,
                          fig_loc, fig_kde, fig_vel, fig_mov, fig_rel, date_range):
