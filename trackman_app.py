@@ -284,7 +284,7 @@ def norm_result(v):
     return RESULT_MAP.get(c,v.strip())
 
 @st.cache_data(show_spinner=False)
-def load_and_clean(_files_bytes, _file_names):
+def load_and_clean(_files_bytes, _file_names, _cache_key):
     frames=[]
     for b,n in zip(_files_bytes,_file_names):
         try: frames.append(pd.read_csv(io.BytesIO(b),low_memory=False))
@@ -852,8 +852,11 @@ def export_hitting_pdf(batter, monthly_df, disc_dict, result_df, split_df, fig_s
 # ══════════════════════════════════════════════════════════════════════════════
 # RENDER: PITCHING
 # ══════════════════════════════════════════════════════════════════════════════
-def render_pitching(df, master_df):
+def render_pitching(df, master_df, lmeta):
     st.markdown('<div class="sh">⚾ Pitching Dashboard</div>',unsafe_allow_html=True)
+    st.info(f"📋 **{lmeta['label']} benchmarks** · "
+            f"Elite velo: {lmeta['velo_elite']}+ mph · Avg: {lmeta['velo_avg']} mph · "
+            f"{lmeta['context']}")
     if "Pitcher" not in df.columns or df["Pitcher"].dropna().empty:
         st.error("No 'Pitcher' column."); return
     pitchers=sorted(df["Pitcher"].dropna().unique())
@@ -917,8 +920,13 @@ def render_pitching(df, master_df):
 # ══════════════════════════════════════════════════════════════════════════════
 # RENDER: HITTING
 # ══════════════════════════════════════════════════════════════════════════════
-def render_hitting(df, master_df):
+def render_hitting(df, master_df, lmeta):
     st.markdown('<div class="sh">🏏 Hitting Dashboard</div>',unsafe_allow_html=True)
+    st.info(f"📋 **{lmeta['label']} benchmarks** · "
+            f"Hard Hit: ≥{lmeta['ev_hard']} mph · Elite EV: {lmeta['ev_elite']}+ mph · "
+            f"{lmeta['barrel_note']}")
+    EV_HARD  = lmeta['ev_hard']
+    EV_ELITE = lmeta['ev_elite']
     if "Batter" not in df.columns or df["Batter"].dropna().empty:
         st.error("No 'Batter' column."); return
     batters=sorted(df["Batter"].dropna().unique())
@@ -931,9 +939,9 @@ def render_hitting(df, master_df):
     hh_rate=barrel_rate=0.0
     if "ExitSpeed" in bdf.columns:
         ev_s=bdf["ExitSpeed"].dropna()
-        hh_rate=safe_pct((ev_s>=95).sum(),len(ev_s))
+        hh_rate=safe_pct((ev_s>=EV_HARD).sum(),len(ev_s))
     if "ExitSpeed" in bdf.columns and "Angle" in bdf.columns:
-        barrel=((bdf["ExitSpeed"].fillna(0)>=98)&
+        barrel=((bdf["ExitSpeed"].fillna(0)>=EV_ELITE)&
                 (bdf["Angle"].fillna(-999)>=8)&
                 (bdf["Angle"].fillna(-999)<=32)).sum()
         barrel_rate=safe_pct(barrel,n)
@@ -1024,8 +1032,9 @@ def render_hitting(df, master_df):
 # ══════════════════════════════════════════════════════════════════════════════
 # RENDER: LEAGUE & STADIUM
 # ══════════════════════════════════════════════════════════════════════════════
-def render_league(df):
+def render_league(df, lmeta):
     st.markdown('<div class="sh">📊 League & Stadium</div>',unsafe_allow_html=True)
+    st.info(f"📋 **{lmeta['label']} benchmarks** · {lmeta['context']}")
     tab_l1,tab_l2=st.tabs(["📈 League Averages","🏟️ Stadium Comparison"])
     with tab_l1:
         c1,c2=st.columns(2)
@@ -1075,32 +1084,111 @@ def main():
     uploaded=st.sidebar.file_uploader("Upload Trackman CSV",type=["csv"],
                                       accept_multiple_files=True)
     if not uploaded:
-        st.markdown("""<div class="upload-zone"><div class="big">📂</div>
-          <div class="ttl">Upload your Trackman CSVs to begin</div></div>""",unsafe_allow_html=True)
+        st.markdown("""
+        <div style="border:2px dashed #d0d0d0;border-radius:8px;padding:60px 36px;
+          text-align:center;margin-top:24px">
+          <div style="font-size:2.8rem;margin-bottom:10px">📂</div>
+          <div style="font-size:1.2rem;font-weight:700;margin-bottom:8px">
+            Upload your Trackman CSVs to begin</div>
+          <div style="font-size:.88rem;opacity:.55;line-height:1.6">
+            Supports one or multiple files · Pro and amateur data welcome<br>
+            The dashboard auto-merges, cleans, and deduplicates player names
+          </div>
+        </div>""",unsafe_allow_html=True)
         return
+
+    # ── Cache-busting: hash actual file contents so swapping a file always re-parses ──
+    import hashlib
     file_bytes=[f.read() for f in uploaded]
     file_names=[f.name for f in uploaded]
-    with st.spinner("Loading…"):
-        master,pa,ba=load_and_clean(tuple(file_bytes),tuple(file_names))
+    cache_key=hashlib.md5(b"".join(file_bytes)).hexdigest()
+
+    # ── Play level selector ───────────────────────────────────────────────────────────
+    st.sidebar.markdown('<span class="sb-label">🏟️ Play Level</span>',unsafe_allow_html=True)
+    level=st.sidebar.radio(
+        "level_radio",
+        ["⚾ Professional","🎓 Amateur / College","🏫 High School","🔀 Mixed"],
+        key="play_level", label_visibility="collapsed"
+    )
+    LEVEL_META={
+        "⚾ Professional":{
+            "label":"Professional",
+            "ev_elite":110, "ev_hard":95, "ev_avg":89,
+            "velo_elite":97, "velo_avg":93,
+            "barrel_note":"MLB barrel zone: ≥98 mph EV, 8°–32° LA",
+            "zone_note":"MLB zone width ≈ 17 in (±0.71 ft)",
+            "context":"Benchmarks calibrated to MLB / MiLB averages.",
+        },
+        "🎓 Amateur / College":{
+            "label":"College / JUCO",
+            "ev_elite":103, "ev_hard":90, "ev_avg":83,
+            "velo_elite":92, "velo_avg":86,
+            "barrel_note":"College barrel zone: ≥92 mph EV, 8°–32° LA",
+            "zone_note":"NCAA zone similar to MLB",
+            "context":"Benchmarks calibrated to NCAA D1/D2/JUCO averages.",
+        },
+        "🏫 High School":{
+            "label":"High School",
+            "ev_elite":95,  "ev_hard":83, "ev_avg":75,
+            "velo_elite":85,"velo_avg":77,
+            "barrel_note":"HS barrel zone: ≥85 mph EV, 8°–32° LA",
+            "zone_note":"Same strike zone dimensions",
+            "context":"Benchmarks calibrated to high-school averages.",
+        },
+        "🔀 Mixed":{
+            "label":"Mixed levels",
+            "ev_elite":105, "ev_hard":92, "ev_avg":85,
+            "velo_elite":93,"velo_avg":87,
+            "barrel_note":"Barrel zone: ≥95 mph EV, 8°–32° LA (blended)",
+            "zone_note":"Standard strike zone",
+            "context":"Dataset contains multiple levels — use stadium context to compare.",
+        },
+    }
+    lmeta=LEVEL_META[level]
+    # Show a small context badge in sidebar
+    st.sidebar.markdown(
+        f'<div style="border:1px solid #e0e0e0;border-left:3px solid #1f77b4;'
+        f'border-radius:4px;padding:7px 10px;font-size:.74rem;margin-top:4px;line-height:1.5">'
+        f'<b>{lmeta["label"]}</b><br>'
+        f'<span style="opacity:.65">{lmeta["context"]}</span><br>'
+        f'<span style="opacity:.55;font-size:.68rem">{lmeta["barrel_note"]}</span>'
+        f'</div>',
+        unsafe_allow_html=True
+    )
+
+    with st.spinner("Loading and parsing data…"):
+        master,pa,ba=load_and_clean(tuple(file_bytes),tuple(file_names),cache_key)
+
     if master.empty:
-        st.error("❌ No valid data."); return
-    st.sidebar.success(f"✅ **{len(master):,}** pitches")
+        st.error("❌ No valid data could be read from the uploaded files."); return
+
+    # Stamp level metadata onto master so downstream functions can use it
+    master.attrs["level_meta"]=lmeta
+
+    total_files=len(uploaded)
+    st.sidebar.success(f"✅ **{len(master):,}** pitches · {total_files} file(s)")
     if pa+ba>0:
-        st.sidebar.markdown(f'<div class="stat-badge" style="margin-top:8px">'
-                            f'🔗 Merged <b>{pa+ba}</b> name variant(s)</div>',
-                            unsafe_allow_html=True)
+        st.sidebar.caption(f"🔗 Merged **{pa+ba}** name variants ({pa} P · {ba} B)")
+
+    # Clear cache button — lets analyst swap files without stale data
+    if st.sidebar.button("🔄 Clear Cache & Reload", help="Force re-parse all uploaded files"):
+        st.cache_data.clear()
+        st.rerun()
+
     filtered=sidebar_date_filter(master)
-    if filtered.empty: st.warning("⚠️ No matching data."); return
+    if filtered.empty: st.warning("⚠️ No data for selected dates."); return
     filtered=advanced_filters(filtered)
     if filtered.empty: st.warning("⚠️ No data after filters."); return
+
     st.sidebar.markdown('<span class="sb-label">🎯 Mode</span>',unsafe_allow_html=True)
     mode=st.sidebar.radio("m",["⚾ Pitching","🏏 Hitting","📊 League"],
                           key="dash_mode",label_visibility="collapsed")
     st.sidebar.markdown("---")
     st.sidebar.caption("v4.1 (Savant Edition) · Streamlit · Pandas · Matplotlib")
-    if mode=="⚾ Pitching": render_pitching(filtered,master)
-    elif mode=="🏏 Hitting": render_hitting(filtered,master)
-    else: render_league(filtered)
+
+    if mode=="⚾ Pitching": render_pitching(filtered,master,lmeta)
+    elif mode=="🏏 Hitting": render_hitting(filtered,master,lmeta)
+    else: render_league(filtered,lmeta)
 
 if __name__=="__main__":
     main()
