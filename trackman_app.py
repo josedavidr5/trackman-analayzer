@@ -1257,4 +1257,4 @@ def main():
     else: render_league(filtered,lmeta)
 
 if __name__=="__main__":
-    main())
+    main()
