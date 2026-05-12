@@ -154,36 +154,69 @@ div[data-testid="stDataFrame"]{border:1px solid #e0e0e0;border-radius:4px;overfl
 # ══════════════════════════════════════════════════════════════════════════════
 # SAVANT CHART STYLING
 # ══════════════════════════════════════════════════════════════════════════════
+# Savant rcParams — applied once at module level for all charts
+plt.rcParams.update({
+    "font.family":        "DejaVu Sans",
+    "font.size":          9,
+    "axes.titlesize":     12,
+    "axes.titleweight":   "bold",
+    "axes.titlepad":      10,
+    "axes.labelsize":     9,
+    "axes.labelcolor":    "#333333",
+    "axes.spines.top":    False,
+    "axes.spines.right":  False,
+    "axes.linewidth":     0.7,
+    "xtick.labelsize":    8.5,
+    "ytick.labelsize":    8.5,
+    "xtick.major.width":  0.7,
+    "ytick.major.width":  0.7,
+    "xtick.major.size":   3.5,
+    "ytick.major.size":   3.5,
+    "legend.fontsize":    8,
+    "legend.framealpha":  0.0,
+    "legend.edgecolor":   "none",
+    "figure.dpi":         150,
+    "savefig.dpi":        150,
+    "figure.facecolor":   "#ffffff",
+    "axes.facecolor":     "#ffffff",
+    "axes.grid":          True,
+    "grid.color":         "#f0f0f0",
+    "grid.linewidth":     0.7,
+    "lines.linewidth":    1.6,
+})
+
 def setup_savant_fig(figsize=(10, 6)):
-    """Create a figure with Savant-style defaults."""
-    fig, ax = plt.subplots(figsize=figsize)
+    """Create a figure with Savant-style defaults (dpi=150, constrained layout)."""
+    fig, ax = plt.subplots(figsize=figsize, layout="constrained")
     fig.patch.set_facecolor(SAVANT_BG)
     ax.set_facecolor(SAVANT_BG)
     return fig, ax
 
 def style_savant_ax(ax, hide_spines=True):
     """Apply Savant typography & grid to axes."""
-    ax.grid(True, color=SAVANT_GRID, linewidth=0.7, alpha=0.8, linestyle='-')
+    ax.grid(True, color=SAVANT_GRID, linewidth=0.65, alpha=1.0, linestyle='-', zorder=0)
     ax.set_axisbelow(True)
     if hide_spines:
         ax.spines['top'].set_visible(False)
         ax.spines['right'].set_visible(False)
-        ax.spines['left'].set_color(SAVANT_TEXT)
-        ax.spines['bottom'].set_color(SAVANT_TEXT)
-        ax.spines['left'].set_linewidth(0.8)
-        ax.spines['bottom'].set_linewidth(0.8)
-    ax.tick_params(colors=SAVANT_TEXT, labelsize=8.5, length=4, width=0.8)
+        ax.spines['left'].set_color("#cccccc")
+        ax.spines['bottom'].set_color("#cccccc")
+        ax.spines['left'].set_linewidth(0.65)
+        ax.spines['bottom'].set_linewidth(0.65)
+    ax.tick_params(which="both", colors=SAVANT_TEXT, labelsize=8.5,
+                   length=3, width=0.65, direction="out")
+    ax.tick_params(which="minor", length=0)
     ax.xaxis.label.set_color(SAVANT_TEXT)
     ax.yaxis.label.set_color(SAVANT_TEXT)
     for label in ax.get_xticklabels() + ax.get_yticklabels():
         label.set_fontsize(8.5); label.set_color(SAVANT_TEXT)
 
 def savant_title(ax, title, subtitle=''):
-    """Add Savant-style title (bold, clean, no decoration)."""
-    ax.text(0.5, 1.04, title, transform=ax.transAxes, ha='center', va='bottom',
-            fontsize=12, fontweight='bold', color=SAVANT_TEXT)
+    """Add Savant-style title — bold, clean, left-aligned like Savant cards."""
+    ax.text(0.0, 1.06, title, transform=ax.transAxes, ha='left', va='bottom',
+            fontsize=11, fontweight='bold', color=SAVANT_TEXT)
     if subtitle:
-        ax.text(0.5, 0.98, subtitle, transform=ax.transAxes, ha='center', va='top',
+        ax.text(0.0, 1.01, subtitle, transform=ax.transAxes, ha='left', va='bottom',
                 fontsize=8.5, color=SAVANT_GREY, style='italic')
 
 def draw_savant_zone(ax, alpha=0.4):
@@ -283,12 +316,42 @@ def norm_result(v):
     c=v.strip().lower().replace(" ","").replace("-","").replace("_","")
     return RESULT_MAP.get(c,v.strip())
 
+def _read_csv_any_encoding(raw_bytes, filename):
+    """
+    Try common encodings in order until one works.
+    0xAD and similar bytes appear in Windows-1252 / Latin-1 exports
+    from Excel, TrackMan desktop, or older scoring software.
+    Falls back to UTF-8 with replacement characters as a last resort
+    so a single bad byte never blocks the whole file.
+    """
+    ENCODINGS = [
+        "utf-8",          # standard — try first
+        "utf-8-sig",      # UTF-8 with BOM (common from Excel "Save as CSV")
+        "cp1252",         # Windows Western European — most common culprit
+        "latin-1",        # ISO-8859-1 — superset of ASCII, never raises
+        "utf-16",         # rare but seen in some export tools
+    ]
+    for enc in ENCODINGS:
+        try:
+            return pd.read_csv(io.BytesIO(raw_bytes), encoding=enc,
+                               low_memory=False), enc
+        except (UnicodeDecodeError, Exception):
+            continue
+    # Absolute fallback: replace undecodable bytes with the replacement char
+    return pd.read_csv(io.BytesIO(raw_bytes), encoding="utf-8",
+                       encoding_errors="replace", low_memory=False), "utf-8 (lossy)"
+
 @st.cache_data(show_spinner=False)
 def load_and_clean(_files_bytes, _file_names, _cache_key):
     frames=[]
     for b,n in zip(_files_bytes,_file_names):
-        try: frames.append(pd.read_csv(io.BytesIO(b),low_memory=False))
-        except Exception as e: st.warning(f"⚠️ Could not read **{n}**: {e}")
+        try:
+            df_file, enc = _read_csv_any_encoding(b, n)
+            if enc != "utf-8":
+                st.sidebar.caption(f"ℹ️ **{n}** read as `{enc}`")
+            frames.append(df_file)
+        except Exception as e:
+            st.warning(f"⚠️ Could not read **{n}**: {e}")
     if not frames: return pd.DataFrame(),0,0
     df=pd.concat(frames,ignore_index=True)
     df=map_cols(df)
@@ -531,7 +594,7 @@ def plot_pitch_locations(df, name):
     for idx,(pt,g) in enumerate(loc.groupby("TaggedPitchType") if not loc.empty else []):
         color=PITCH_PALETTE[idx%len(PITCH_PALETTE)]
         ax.scatter(g["PlateLocSide"],g["PlateLocHeight"],label=pt,color=color,
-                   alpha=0.70,s=35,edgecolors="none",zorder=6)
+                   alpha=0.75,s=38,edgecolors="white",linewidths=0.5,zorder=6)
     if loc.empty:
         ax.text(.5,.5,"No location data",ha="center",va="center",color=SAVANT_GREY,transform=ax.transAxes)
     draw_savant_zone(ax); draw_plate(ax)
@@ -541,7 +604,7 @@ def plot_pitch_locations(df, name):
     style_savant_ax(ax)
     ax.legend(fontsize=7.5,framealpha=0.6,edgecolor="none",facecolor="none",labelcolor=SAVANT_TEXT)
     ax.set_aspect("equal",adjustable="box")
-    fig.tight_layout(pad=1.0); return fig
+    return fig
 
 def plot_hot_zone(df, name):
     fig, ax = setup_savant_fig((5.5, 6))
@@ -549,7 +612,7 @@ def plot_hot_zone(df, name):
     if len(loc)>=5:
         try:
             sns.kdeplot(data=loc,x="PlateLocSide",y="PlateLocHeight",fill=True,
-                        cmap="Blues",alpha=0.60,levels=10,thresh=0.05,ax=ax)
+                        cmap="RdYlBu_r",alpha=0.65,levels=12,thresh=0.04,ax=ax)
         except Exception: pass
     else:
         ax.text(.5,.5,"Need ≥ 5 pitches",ha="center",va="center",color=SAVANT_GREY,transform=ax.transAxes)
@@ -559,7 +622,7 @@ def plot_hot_zone(df, name):
     savant_title(ax,"Hot Zone (Density)",name)
     style_savant_ax(ax)
     ax.set_aspect("equal",adjustable="box")
-    fig.tight_layout(pad=1.0); return fig
+    return fig
 
 def plot_spray_chart(df, name):
     fig, ax = setup_savant_fig((6.5, 6.5))
@@ -583,7 +646,8 @@ def plot_spray_chart(df, name):
     sc=ax.scatter(spray["Hit_X"],spray["Hit_Y"],
                   c=spray["ExitSpeed"] if has_ev else SAVANT_BLUE,
                   cmap="coolwarm" if has_ev else None,
-                  s=50, alpha=0.75, edgecolors="white", linewidths=0.5, zorder=5, vmin=60, vmax=110)
+                  s=45, alpha=0.80, edgecolors="white", linewidths=0.5,
+                  zorder=5, vmin=65, vmax=112, rasterized=True)
     if has_ev:
         cb=fig.colorbar(sc,ax=ax,pad=0.02,shrink=0.7)
         cb.set_label("Exit Speed (mph)", fontsize=8, color=SAVANT_TEXT)
@@ -593,7 +657,7 @@ def plot_spray_chart(df, name):
     savant_title(ax,"Spray Chart",name)
     style_savant_ax(ax)
     ax.set_aspect("equal",adjustable="box")
-    fig.tight_layout(pad=1.0); return fig
+    return fig
 
 def plot_ev_la_scatter(df, name):
     fig, ax = setup_savant_fig((7, 5))
@@ -606,15 +670,15 @@ def plot_ev_la_scatter(df, name):
         for res,color in RESULT_COLORS.items():
             pts=sub[sub["PlayResult"]==res]
             if len(pts):
-                ax.scatter(pts["ExitSpeed"],pts["Angle"],color=color,alpha=0.65,
-                           s=25,label=res,edgecolors="none",zorder=5)
+                ax.scatter(pts["ExitSpeed"],pts["Angle"],color=color,alpha=0.78,
+                           s=30,label=res,edgecolors="white",linewidths=0.5,zorder=5)
         others=sub[~sub["PlayResult"].isin(RESULT_COLORS)]
         if len(others):
-            ax.scatter(others["ExitSpeed"],others["Angle"],color=SAVANT_GREY,alpha=0.3,
-                       s=15,edgecolors="none",zorder=3)
+            ax.scatter(others["ExitSpeed"],others["Angle"],color="#cccccc",alpha=0.40,
+                       s=18,edgecolors="white",linewidths=0.3,zorder=3)
     else:
-        ax.scatter(sub["ExitSpeed"],sub["Angle"],color=SAVANT_BLUE,alpha=0.50,
-                   s=25,edgecolors="none",zorder=4)
+        ax.scatter(sub["ExitSpeed"],sub["Angle"],color=SAVANT_BLUE,alpha=0.60,
+                   s=30,edgecolors="white",linewidths=0.5,zorder=4)
     # Barrel zone
     ax.add_patch(patches.Rectangle((98,8),20,24,lw=1.8,edgecolor=SAVANT_ACCENT,
                                    facecolor=SAVANT_ACCENT,alpha=0.06,linestyle="--",zorder=2))
@@ -623,7 +687,7 @@ def plot_ev_la_scatter(df, name):
     savant_title(ax,"Hit Quality Map — Exit Velo × Launch Angle",name)
     style_savant_ax(ax)
     ax.legend(fontsize=7.5,framealpha=0.6,edgecolor="none",facecolor="none",labelcolor=SAVANT_TEXT,loc="upper left")
-    fig.tight_layout(pad=1.0); return fig
+    return fig
 
 def plot_damage_zone(df, name):
     fig, ax = setup_savant_fig((5.5, 6))
@@ -637,8 +701,8 @@ def plot_damage_zone(df, name):
         sc=ax.scatter(loc["PlateLocSide"],loc["PlateLocHeight"],
                       c=loc["ExitSpeed"] if has_ev else SAVANT_ACCENT,
                       cmap="coolwarm" if has_ev else None,
-                      s=40,alpha=0.70,edgecolors="white" if has_ev else "none",
-                      linewidths=0.5,zorder=6,vmin=60,vmax=110)
+                      s=42,alpha=0.75,edgecolors="white",
+                      linewidths=0.5,zorder=6,vmin=65,vmax=112)
         if has_ev:
             cb=fig.colorbar(sc,ax=ax,pad=0.02,shrink=0.7)
             cb.set_label("Exit Speed (mph)", fontsize=8, color=SAVANT_TEXT)
@@ -651,7 +715,7 @@ def plot_damage_zone(df, name):
     savant_title(ax,"Damage Zone",name)
     style_savant_ax(ax)
     ax.set_aspect("equal",adjustable="box")
-    fig.tight_layout(pad=1.0); return fig
+    return fig
 
 def plot_ev_distribution(df, name):
     fig, ax = setup_savant_fig((7, 4))
@@ -659,13 +723,13 @@ def plot_ev_distribution(df, name):
     if ev.empty:
         ax.text(.5,.5,"No EV data",ha="center",va="center",color=SAVANT_GREY,transform=ax.transAxes)
         fig.tight_layout(); return fig
-    _,bins,patches_list=ax.hist(ev,bins=22,color=SAVANT_BLUE,alpha=0.70,
-                                 edgecolor=SAVANT_BG,linewidth=0.3)
+    _,bins,patches_list=ax.hist(ev,bins=24,color=SAVANT_BLUE,alpha=0.72,
+                                 edgecolor="#ffffff",linewidth=0.6)
     for p,left in zip(patches_list,bins[:-1]):
-        if left>=95: p.set_facecolor(SAVANT_RED); p.set_alpha(0.80)
-    ax.axvline(ev.mean(),color=SAVANT_ACCENT,lw=2.0,linestyle="--",zorder=6,
+        if left>=95: p.set_facecolor(SAVANT_RED); p.set_alpha(0.85)
+    ax.axvline(ev.mean(),color=SAVANT_TEXT,lw=1.6,linestyle="--",zorder=6,
                label=f"Avg {ev.mean():.1f}")
-    ax.axvline(95,color=SAVANT_RED,lw=1.5,linestyle=":",zorder=6,label="Hard Hit (95)")
+    ax.axvline(95,color=SAVANT_RED,lw=1.4,linestyle=":",zorder=6,label="Hard Hit (95)")
     hh=(ev>=95).sum()
     ax.text(0.97,0.93,f"HH: {hh} ({safe_pct(hh,len(ev))}%)",transform=ax.transAxes,
             ha="right",va="top",color=SAVANT_RED,fontsize=9,fontweight="bold")
@@ -673,7 +737,7 @@ def plot_ev_distribution(df, name):
     savant_title(ax,"Exit Velocity Distribution",name)
     style_savant_ax(ax)
     ax.legend(fontsize=8,framealpha=0.6,edgecolor="none",facecolor="none",labelcolor=SAVANT_TEXT)
-    fig.tight_layout(pad=1.0); return fig
+    return fig
 
 def plot_la_distribution(df, name):
     fig, ax = setup_savant_fig((7, 4))
@@ -681,12 +745,12 @@ def plot_la_distribution(df, name):
     if la.empty:
         ax.text(.5,.5,"No LA data",ha="center",va="center",color=SAVANT_GREY,transform=ax.transAxes)
         fig.tight_layout(); return fig
-    _,bins,patches_list=ax.hist(la,bins=22,color=SAVANT_BLUE,alpha=0.70,
-                                 edgecolor=SAVANT_BG,linewidth=0.3)
+    _,bins,patches_list=ax.hist(la,bins=24,color=SAVANT_BLUE,alpha=0.72,
+                                 edgecolor="#ffffff",linewidth=0.6)
     for p,left,right in zip(patches_list,bins[:-1],bins[1:]):
         if left>=8 and right<=32: p.set_facecolor(SAVANT_GREEN); p.set_alpha(0.85)
-    ax.axvspan(8,32,alpha=0.08,color=SAVANT_GREEN,label="Barrel 8–32°",zorder=1)
-    ax.axvline(la.mean(),color=SAVANT_ACCENT,lw=2.0,linestyle="--",zorder=6,
+    ax.axvspan(8,32,alpha=0.07,color=SAVANT_GREEN,label="Barrel 8–32°",zorder=1)
+    ax.axvline(la.mean(),color=SAVANT_TEXT,lw=1.6,linestyle="--",zorder=6,
                label=f"Avg {la.mean():.1f}°")
     barrel=((la>=8)&(la<=32)).sum()
     ax.text(0.97,0.93,f"Barrel: {barrel} ({safe_pct(barrel,len(la))}%)",transform=ax.transAxes,
@@ -695,7 +759,7 @@ def plot_la_distribution(df, name):
     savant_title(ax,"Launch Angle Distribution",name)
     style_savant_ax(ax)
     ax.legend(fontsize=8,framealpha=0.6,edgecolor="none",facecolor="none",labelcolor=SAVANT_TEXT)
-    fig.tight_layout(pad=1.0); return fig
+    return fig
 
 def plot_velocity_tendency(df, name):
     fig, ax = setup_savant_fig((11, 3.8))
@@ -708,8 +772,10 @@ def plot_velocity_tendency(df, name):
         daily.columns=["Date","mean","std"]; daily["std"]=daily["std"].fillna(0)
         color=PITCH_PALETTE[idx%len(PITCH_PALETTE)]
         ax.fill_between(daily["Date"],daily["mean"]-daily["std"],daily["mean"]+daily["std"],
-                        alpha=0.10,color=color)
-        ax.plot(daily["Date"],daily["mean"],label=pt,color=color,lw=1.8,marker="o",ms=4,alpha=0.85,zorder=5)
+                        alpha=0.08,color=color,zorder=1)
+        ax.plot(daily["Date"],daily["mean"],label=pt,color=color,lw=2.0,
+                marker="o",ms=4.5,markeredgecolor="white",markeredgewidth=0.6,
+                alpha=0.90,zorder=5,solid_capstyle="round")
         if not daily.empty:
             last=daily.iloc[-1]
             ax.annotate(f'{last["mean"]:.1f}',(last["Date"],last["mean"]),
@@ -718,7 +784,7 @@ def plot_velocity_tendency(df, name):
     savant_title(ax,"Velocity Tendency",name)
     style_savant_ax(ax)
     ax.legend(fontsize=7.5,framealpha=0.6,edgecolor="none",facecolor="none",labelcolor=SAVANT_TEXT)
-    fig.autofmt_xdate(rotation=28,ha="right"); fig.tight_layout(pad=1.0); return fig
+    fig.autofmt_xdate(rotation=28,ha="right"); return fig
 
 def plot_movement_profile(df, name):
     fig, ax = setup_savant_fig((6.5, 5.8))
@@ -731,8 +797,8 @@ def plot_movement_profile(df, name):
         x,y,n=g["HorzBreak"].mean(),g["InducedVertBreak"].mean(),len(g)
         color=PITCH_PALETTE[idx%len(PITCH_PALETTE)]
         ax.scatter(g["HorzBreak"],g["InducedVertBreak"],color=color,alpha=0.08,s=8,edgecolors="none",zorder=3)
-        ax.scatter(x,y,s=max(n*3,60),color=color,alpha=0.80,
-                   edgecolors="white",linewidths=0.8,zorder=6)
+        ax.scatter(x,y,s=max(n*3.5,70),color=color,alpha=0.88,
+                   edgecolors="white",linewidths=1.2,zorder=6)
         ax.annotate(f"{pt}\n(n={n})",(x,y),xytext=(6,4),textcoords="offset points",
                     fontsize=8,color=color,fontweight="bold")
     ax.axhline(0,color=SAVANT_GREY,lw=0.8,alpha=0.6,zorder=2)
@@ -744,7 +810,7 @@ def plot_movement_profile(df, name):
     ax.set_xlabel("Horizontal Break (in) — Arm side →", fontsize=9)
     ax.set_ylabel("Induced Vert Break (in) — Rise →", fontsize=9)
     savant_title(ax,"Movement Profile",name)
-    style_savant_ax(ax); fig.tight_layout(pad=1.0); return fig
+    style_savant_ax(ax); return fig
 
 # ══════════════════════════════════════════════════════════════════════════════
 # PDF EXPORT (fixed for matplotlib 3.8+)
@@ -752,7 +818,7 @@ def plot_movement_profile(df, name):
 def _fig_to_img(src_fig):
     import matplotlib.image as mpimg
     img_buf = io.BytesIO()
-    src_fig.savefig(img_buf, format="png", dpi=110,
+    src_fig.savefig(img_buf, format="png", dpi=150,
                     bbox_inches="tight", facecolor=src_fig.get_facecolor())
     img_buf.seek(0)
     return mpimg.imread(img_buf)
@@ -1191,4 +1257,4 @@ def main():
     else: render_league(filtered,lmeta)
 
 if __name__=="__main__":
-    main()
+    main())
