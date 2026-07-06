@@ -1,13 +1,16 @@
 """
 =============================================================================
-  TRACKMAN BASEBALL ANALYTICS DASHBOARD  v4.1 — SAVANT EDITION
+  TRACKMAN BASEBALL ANALYTICS DASHBOARD  v4.2 — SAVANT EDITION
   Expert-grade Streamlit app with Baseball Savant–inspired visuals
   ─────────────────────────────────────────────────────────────────────────
   KEY FEATURES:
     ✓ Player search bar (live filtering for 100+ rosters)
     ✓ vs RHP / vs LHP splits with dual spray charts & damage zones
     ✓ Play result breakdown (1B, 2B, 3B, HR, K, BB, etc.)
-    ✓ K% calculated correctly from PlayResult column
+    ✓ K% / BB% per plate appearance (v4.2 fix)
+    ✓ Zone% / Chase% from true pitch location (v4.2 fix)
+    ✓ Savant-style dynamic barrel definition per batted ball (v4.2 fix)
+    ✓ Pitch usage by count, rolling EV trend, per-pitch heatmaps, wOBA (v4.2)
     ✓ League averages & stadium intelligence
     ✓ Park factor heatmaps (hitter vs pitcher friendly)
     ✓ EV × LA quality scatter with barrel zone highlight
@@ -114,7 +117,7 @@ NUMERIC_COLS=["RelSpeed","SpinRate","InducedVertBreak","HorzBreak",
 # ══════════════════════════════════════════════════════════════════════════════
 # PAGE CONFIG & STREAMLIT
 # ══════════════════════════════════════════════════════════════════════════════
-st.set_page_config(page_title="Trackman Analytics v4.1 (Savant)", page_icon="⚾",
+st.set_page_config(page_title="Trackman Analytics v4.2 (Savant)", page_icon="⚾",
                    layout="wide", initial_sidebar_state="expanded")
 
 st.markdown("""<style>
@@ -242,6 +245,77 @@ def fmt(v, suffix="", decimals=1):
     return f"{v:.{decimals}f}{suffix}"
 
 # ══════════════════════════════════════════════════════════════════════════════
+# CORE SABERMETRIC HELPERS (v4.2 — correct denominators & true zone)
+# ══════════════════════════════════════════════════════════════════════════════
+TERMINAL_RESULTS={"1B","2B","3B","HR","Out","K","BB","HBP","FC","Error","SacFly","SacBunt"}
+SWING_CALLS={"StrikeSwinging","FoulBall","FoulBallFieldable","FoulBallNotFieldable","InPlay"}
+CONTACT_CALLS={"FoulBall","FoulBallFieldable","FoulBallNotFieldable","InPlay"}
+# Rulebook zone (±0.71 ft) + one ball radius of margin, typical 1.5–3.5 ft height
+ZONE_HALF_WIDTH=0.83
+ZONE_BOTTOM, ZONE_TOP=1.5, 3.5
+# wOBA linear weights (FanGraphs ~2023, stable enough for scouting use)
+WOBA_W={"BB":0.69,"HBP":0.72,"1B":0.89,"2B":1.27,"3B":1.62,"HR":2.10}
+
+def count_pa(df):
+    """Plate appearances = pitches whose PlayResult is a terminal outcome."""
+    if "PlayResult" in df.columns:
+        pa=int(df["PlayResult"].astype(str).isin(TERMINAL_RESULTS).sum())
+        if pa>0: return pa
+    if "PitchCall" in df.columns:                      # rough fallback
+        return int(df["PitchCall"].astype(str).isin({"InPlay","HitByPitch"}).sum())
+    return 0
+
+def in_zone_mask(df):
+    """(mask, has_location) — true strike-zone membership from PlateLoc columns."""
+    if {"PlateLocSide","PlateLocHeight"}.issubset(df.columns) and df["PlateLocSide"].notna().any():
+        m=((df["PlateLocSide"].abs()<=ZONE_HALF_WIDTH)
+           &(df["PlateLocHeight"].between(ZONE_BOTTOM,ZONE_TOP)))
+        return m.fillna(False), True
+    return pd.Series(False,index=df.index), False
+
+def batted_ball_mask(df):
+    """Balls put in play — denominator for HH% / Barrel%."""
+    if "PitchCall" in df.columns:
+        m=df["PitchCall"].astype(str).eq("InPlay")
+        if m.any(): return m
+    if "ExitSpeed" in df.columns: return df["ExitSpeed"].notna()
+    return pd.Series(False,index=df.index)
+
+def barrel_mask(df, barrel_ev_base=98):
+    """
+    Savant-style barrel: EV ≥ 98 opens an LA window of 26–30° that widens
+    ~1°/mph downward and ~1.1°/mph upward until 8–50° at 116+ mph.
+    barrel_ev_base rescales for College/HS levels (e.g. 92 → treated as 98).
+    """
+    if not {"ExitSpeed","Angle"}.issubset(df.columns):
+        return pd.Series(False,index=df.index)
+    ev=df["ExitSpeed"]+(98-barrel_ev_base)
+    la=df["Angle"]
+    lo=(26-(ev-98)).clip(lower=8)
+    hi=(30+(ev-98)*(20/18)).clip(upper=50)
+    return ((ev>=98)&(la>=lo)&(la<=hi)).fillna(False)
+
+def count_k_bb(df):
+    """(K, BB) counted once per PA from PlayResult, PitchCall fallback for K."""
+    kk=bb=0
+    if "PlayResult" in df.columns:
+        pr=df["PlayResult"].astype(str)
+        kk=int(pr.eq("K").sum()); bb=int(pr.eq("BB").sum())
+    if kk==0 and "PitchCall" in df.columns:
+        kk=int(df["PitchCall"].astype(str).isin({"StrikeoutSwinging","StrikeoutCalled"}).sum())
+    return kk,bb
+
+def compute_woba(df):
+    """wOBA from tagged PlayResults. Returns np.nan without PA data."""
+    pa=count_pa(df)
+    if pa==0 or "PlayResult" not in df.columns: return np.nan
+    pr=df["PlayResult"].astype(str)
+    num=sum(w*int(pr.eq(res).sum()) for res,w in WOBA_W.items())
+    # exclude sac bunts from denominator (standard wOBA convention)
+    denom=pa-int(pr.eq("SacBunt").sum())
+    return round(num/denom,3) if denom>0 else np.nan
+
+# ══════════════════════════════════════════════════════════════════════════════
 # NAME NORMALISATION (unchanged from v4)
 # ══════════════════════════════════════════════════════════════════════════════
 def _strip_accents(s):
@@ -356,7 +430,13 @@ def load_and_clean(_files_bytes, _file_names, _cache_key):
     df=pd.concat(frames,ignore_index=True)
     df=map_cols(df)
     if "Date" in df.columns:
-        df["Date"]=pd.to_datetime(df["Date"],dayfirst=True,errors="coerce")
+        # v4.2: TrackMan exports are month-first (US); only fall back to
+        # dayfirst if standard parsing fails on most rows.
+        parsed=pd.to_datetime(df["Date"],errors="coerce",format="mixed")
+        if parsed.notna().mean()<0.5:
+            alt=pd.to_datetime(df["Date"],dayfirst=True,errors="coerce",format="mixed")
+            if alt.notna().sum()>parsed.notna().sum(): parsed=alt
+        df["Date"]=parsed
     else:
         df["Date"]=pd.NaT
     before=len(df)
@@ -467,20 +547,36 @@ def build_pitch_summary(df):
     return out.sort_values(["_fb","Count"],ascending=[False,False]).drop(columns="_fb").reset_index(drop=True)
 
 def compute_pitch_discipline(df):
+    """
+    Per-pitch-type discipline (v4.2):
+      Zone %  = pitches inside the true zone (PlateLoc) / located pitches
+      Chase % = swings at pitches OUT of zone / out-of-zone pitches
+    Falls back to PitchCall approximation when location data is missing.
+    """
     if "PitchCall" not in df.columns: return pd.DataFrame()
-    ZONE={"StrikeCalled","StrikeSwinging","FoulBall","FoulBallFieldable","FoulBallNotFieldable","InPlay"}
-    SWING={"StrikeSwinging","FoulBall","FoulBallFieldable","FoulBallNotFieldable","InPlay"}
-    CONTACT={"FoulBall","FoulBallFieldable","FoulBallNotFieldable","InPlay"}
-    WHIFF={"StrikeSwinging"}
+    ZONE_CALLS={"StrikeCalled","StrikeSwinging","FoulBall","FoulBallFieldable","FoulBallNotFieldable","InPlay"}
     rows=[]
     for pt,grp in df.groupby("TaggedPitchType"):
         pc=grp["PitchCall"].astype(str)
-        n=len(grp); in_z=pc.isin(ZONE).sum(); sw=pc.isin(SWING).sum()
-        ct=pc.isin(CONTACT).sum(); wh=pc.isin(WHIFF).sum()
+        n=len(grp)
+        sw_m=pc.isin(SWING_CALLS); ct_m=pc.isin(CONTACT_CALLS); wh_m=pc.eq("StrikeSwinging")
+        sw,ct,wh=int(sw_m.sum()),int(ct_m.sum()),int(wh_m.sum())
+        zone_m,has_loc=in_zone_mask(grp)
+        if has_loc:
+            located=grp["PlateLocSide"].notna()&grp["PlateLocHeight"].notna()
+            n_loc=int(located.sum())
+            in_z=int(zone_m.sum())
+            oz=located&~zone_m
+            zone_pct=safe_pct(in_z,n_loc)
+            chase_pct=safe_pct(int((sw_m&oz).sum()),max(int(oz.sum()),1))
+        else:
+            in_z=int(pc.isin(ZONE_CALLS).sum())
+            zone_pct=safe_pct(in_z,n)
+            chase_pct=safe_pct(max(0,sw-ct),max(n-in_z,1))
         rows.append({"Pitch":pt,"Count":n,
-                     "Zone %":safe_pct(in_z,n),"Swing %":safe_pct(sw,n),
+                     "Zone %":zone_pct,"Swing %":safe_pct(sw,n),
                      "Contact %":safe_pct(ct,max(sw,1)),
-                     "Chase %":safe_pct(max(0,sw-ct),max(n-in_z,1)),
+                     "Chase %":chase_pct,
                      "Whiff %":safe_pct(wh,max(sw,1))})
     return pd.DataFrame(rows).sort_values("Count",ascending=False).reset_index(drop=True)
 
@@ -489,66 +585,83 @@ def build_play_result_table(df):
     counts=df["PlayResult"].value_counts().reset_index()
     counts.columns=["Result","Count"]
     counts=counts[counts["Result"]!="—"]
-    counts["% of PAs"]=counts["Count"].apply(lambda x:safe_pct(x,len(df)))
+    pa=max(count_pa(df),1)                      # v4.2: real PA denominator
+    counts["% of PAs"]=counts["Count"].apply(lambda x:safe_pct(x,pa))
     return counts.reset_index(drop=True)
 
 def compute_plate_discipline_batter(df):
+    """
+    Batter plate discipline (v4.2 fixes):
+      • Zone % / Chase % from true pitch location when available
+      • K % and BB % per PLATE APPEARANCE (not per pitch)
+      • BB counted from PlayResult (a called ball is NOT a walk)
+    """
     if "PitchCall" not in df.columns: return {}
     pc=df["PitchCall"].astype(str)
-    ZONE={"StrikeCalled","StrikeSwinging","FoulBall","FoulBallFieldable","FoulBallNotFieldable","InPlay"}
-    SWING={"StrikeSwinging","FoulBall","FoulBallFieldable","FoulBallNotFieldable","InPlay"}
-    CONTACT={"FoulBall","FoulBallFieldable","FoulBallNotFieldable","InPlay"}
-    WHIFF={"StrikeSwinging"}
-    BB_CALLS={"BallCalled","HitByPitch","IntentionalBall"}
-    n=len(df); in_z=pc.isin(ZONE).sum(); sw=pc.isin(SWING).sum()
-    cont=pc.isin(CONTACT).sum(); whiff=pc.isin(WHIFF).sum()
-    kk=0
-    if "PlayResult" in df.columns:
-        kk=(df["PlayResult"].astype(str).str.strip()=="K").sum()
-    if kk==0:
-        kk=pc.isin({"StrikeoutSwinging","StrikeoutCalled"}).sum()
-    bb=pc.isin(BB_CALLS).sum()
-    return {"Zone %":safe_pct(in_z,n), "Swing %":safe_pct(sw,n),
+    ZONE_CALLS={"StrikeCalled","StrikeSwinging","FoulBall","FoulBallFieldable","FoulBallNotFieldable","InPlay"}
+    n=len(df)
+    sw_m=pc.isin(SWING_CALLS); ct_m=pc.isin(CONTACT_CALLS)
+    sw,cont,whiff=int(sw_m.sum()),int(ct_m.sum()),int(pc.eq("StrikeSwinging").sum())
+    zone_m,has_loc=in_zone_mask(df)
+    if has_loc:
+        located=df["PlateLocSide"].notna()&df["PlateLocHeight"].notna()
+        in_z=int(zone_m.sum()); n_loc=int(located.sum())
+        oz=located&~zone_m
+        zone_pct=safe_pct(in_z,n_loc)
+        chase_pct=safe_pct(int((sw_m&oz).sum()),max(int(oz.sum()),1))
+    else:
+        in_z=int(pc.isin(ZONE_CALLS).sum())
+        zone_pct=safe_pct(in_z,n)
+        chase_pct=safe_pct(max(0,sw-cont),max(n-in_z,1))
+    pa=count_pa(df)
+    kk,bb=count_k_bb(df)
+    return {"Zone %":zone_pct, "Swing %":safe_pct(sw,n),
             "Contact %":safe_pct(cont,max(sw,1)),
-            "Chase %":safe_pct(max(0,sw-cont),max(n-in_z,1)),
+            "Chase %":chase_pct,
             "Whiff %":safe_pct(whiff,max(sw,1)),
-            "K %":safe_pct(kk,n), "BB %":safe_pct(bb,n)}
+            "K %":safe_pct(kk,max(pa,1)), "BB %":safe_pct(bb,max(pa,1))}
 
-def build_split_table(df, split_col="PitcherThrows"):
+def build_split_table(df, split_col="PitcherThrows", ev_hard=95):
     if split_col not in df.columns: return pd.DataFrame()
     rows=[]
     for hand,grp in df.groupby(split_col):
-        n=len(grp); r={"vs":hand,"Pitches":n}
+        n=len(grp); r={"vs":hand,"Pitches":n,"PA":count_pa(grp)}
         if "ExitSpeed" in grp.columns:
             ev=grp["ExitSpeed"].dropna()
             r["Avg EV"]=round(ev.mean(),1) if not ev.empty else np.nan
-            r["HH %"]=safe_pct((ev>=95).sum(),len(ev))
+            r["HH %"]=safe_pct((ev>=ev_hard).sum(),len(ev))
         if "Angle" in grp.columns:
             la=grp["Angle"].dropna()
             r["Avg LA"]=round(la.mean(),1) if not la.empty else np.nan
         disc=compute_plate_discipline_batter(grp)
         r.update({k:v for k,v in disc.items()})
+        r["wOBA"]=compute_woba(grp)
         rows.append(r)
     return pd.DataFrame(rows).reset_index(drop=True)
 
-def build_hitting_monthly(df):
+def build_hitting_monthly(df, lmeta=None):
+    ev_hard=(lmeta or {}).get("ev_hard",95)
+    barrel_base=(lmeta or {}).get("barrel_ev",98)
     df=df.copy(); df["YearMonth"]=df["Date"].dt.to_period("M")
     rows=[]
     for period,grp in df.groupby("YearMonth"):
-        r={"Month":str(period),"Pitches":len(grp)}
+        r={"Month":str(period),"Pitches":len(grp),"PA":count_pa(grp)}
         for col,(mx,av) in [("ExitSpeed",("Max EV","Avg EV")),("Angle",("Max LA","Avg LA")),("Distance",("Max Dist","Avg Dist"))]:
             if col in df.columns:
                 vals=grp[col].dropna()
                 r[mx]=round(vals.max(),1) if not vals.empty else np.nan
                 r[av]=round(vals.mean(),1) if not vals.empty else np.nan
+        bip=batted_ball_mask(grp)                     # v4.2: batted-ball denominator
+        n_bip=int(bip.sum())
         if "ExitSpeed" in df.columns:
-            ev=grp["ExitSpeed"].dropna()
-            r["HH %"]=safe_pct((ev>=95).sum(),len(ev))
+            ev=grp.loc[bip,"ExitSpeed"].dropna()
+            r["HH %"]=safe_pct(int((ev>=ev_hard).sum()),max(len(ev),1))
         if "ExitSpeed" in df.columns and "Angle" in df.columns:
-            barrel=((grp["ExitSpeed"].fillna(0)>=98)&(grp["Angle"].fillna(-999)>=8)&(grp["Angle"].fillna(-999)<=32)).sum()
-            r["Barrel %"]=safe_pct(barrel,len(grp))
-        if "PlayResult" in df.columns:
-            r["K %"]=safe_pct((grp["PlayResult"].astype(str)=="K").sum(),len(grp))
+            barrels=int(barrel_mask(grp[bip],barrel_base).sum()) if n_bip else 0
+            r["Barrel %"]=safe_pct(barrels,max(n_bip,1))
+        kk,bb=count_k_bb(grp); pa=max(count_pa(grp),1)
+        r["K %"]=safe_pct(kk,pa); r["BB %"]=safe_pct(bb,pa)
+        r["wOBA"]=compute_woba(grp)
         rows.append(r)
     out=pd.DataFrame(rows)
     return out.sort_values("Month",ascending=False).reset_index(drop=True) if not out.empty else out
@@ -568,20 +681,25 @@ def build_league_pitching_avg(df):
     out["_fb"]=out["Pitch"].str.lower().str.contains("fastball|4-seam|2-seam").astype(int)
     return out.sort_values(["_fb","Pitches"],ascending=[False,False]).drop(columns="_fb").reset_index(drop=True)
 
-def build_league_hitting_avg(df):
+def build_league_hitting_avg(df, lmeta=None):
     if "ExitSpeed" not in df.columns: return pd.DataFrame()
-    ev=df["ExitSpeed"].dropna()
-    la=df["Angle"].dropna() if "Angle" in df.columns else pd.Series(dtype=float)
-    dist=df["Distance"].dropna() if "Distance" in df.columns else pd.Series(dtype=float)
-    barrel=pd.Series(dtype=float)
-    if "ExitSpeed" in df.columns and "Angle" in df.columns:
-        barrel=((df["ExitSpeed"].fillna(0)>=98)&(df["Angle"].fillna(-999)>=8)&(df["Angle"].fillna(-999)<=32))
+    ev_hard=(lmeta or {}).get("ev_hard",95)
+    barrel_base=(lmeta or {}).get("barrel_ev",98)
+    bip=batted_ball_mask(df); n_bip=max(int(bip.sum()),1)
+    ev=df.loc[bip,"ExitSpeed"].dropna()
+    la=df.loc[bip,"Angle"].dropna() if "Angle" in df.columns else pd.Series(dtype=float)
+    dist=df.loc[bip,"Distance"].dropna() if "Distance" in df.columns else pd.Series(dtype=float)
+    barrels=int(barrel_mask(df[bip],barrel_base).sum()) if "Angle" in df.columns else 0
+    kk,bb=count_k_bb(df); pa=max(count_pa(df),1)
     rows=[
         {"Metric":"Avg Exit Velo","League":fmt(ev.mean()," mph"),"Median":fmt(ev.median()," mph"),"Max":fmt(ev.max()," mph")},
         {"Metric":"Avg LA","League":fmt(la.mean(),"°"),"Median":fmt(la.median(),"°"),"Max":fmt(la.max(),"°")},
         {"Metric":"Avg Distance","League":fmt(dist.mean()," ft"),"Median":fmt(dist.median()," ft"),"Max":fmt(dist.max()," ft")},
-        {"Metric":"Hard Hit %","League":f"{safe_pct((ev>=95).sum(),len(ev))}%","Median":"—","Max":"—"},
-        {"Metric":"Barrel %","League":f"{safe_pct(barrel.sum(),len(df))}%" if len(barrel)>0 else "—","Median":"—","Max":"—"},
+        {"Metric":f"Hard Hit % (≥{ev_hard})","League":f"{safe_pct(int((ev>=ev_hard).sum()),max(len(ev),1))}%","Median":"—","Max":"—"},
+        {"Metric":"Barrel % (of BIP)","League":f"{safe_pct(barrels,n_bip)}%","Median":"—","Max":"—"},
+        {"Metric":"K % (per PA)","League":f"{safe_pct(kk,pa)}%","Median":"—","Max":"—"},
+        {"Metric":"BB % (per PA)","League":f"{safe_pct(bb,pa)}%","Median":"—","Max":"—"},
+        {"Metric":"wOBA","League":fmt(compute_woba(df),"",3),"Median":"—","Max":"—"},
     ]
     return pd.DataFrame(rows)
 
@@ -626,7 +744,11 @@ def plot_hot_zone(df, name):
 
 def plot_spray_chart(df, name):
     fig, ax = setup_savant_fig((6.5, 6.5))
-    spray=df.dropna(subset=["Distance","Bearing"]).copy()
+    # v4.2: guard against missing Distance/Bearing columns (was a KeyError)
+    if not {"Distance","Bearing"}.issubset(df.columns):
+        spray=pd.DataFrame()
+    else:
+        spray=df.dropna(subset=["Distance","Bearing"]).copy()
     if spray.empty:
         ax.text(.5,.5,"No spray data",ha="center",va="center",color=SAVANT_GREY,transform=ax.transAxes)
         savant_title(ax,"Spray Chart",name); style_savant_ax(ax)
@@ -813,6 +935,282 @@ def plot_movement_profile(df, name):
     style_savant_ax(ax); return fig
 
 # ══════════════════════════════════════════════════════════════════════════════
+# NEW ANALYTICS v4.2 — usage by count, rolling EV, per-pitch heatmaps
+# ══════════════════════════════════════════════════════════════════════════════
+def build_usage_by_count(df):
+    """Pitch usage % by ball-strike count (rows=pitch, cols=count)."""
+    if "Count" not in df.columns or df["Count"].isna().all(): return pd.DataFrame()
+    sub=df[df["Count"].notna()&~df["Count"].str.contains("<NA>",na=True)]
+    if sub.empty: return pd.DataFrame()
+    order=[f"{b}-{s}" for b in range(4) for s in range(3)]
+    tab=pd.crosstab(sub["TaggedPitchType"],sub["Count"],normalize="columns")*100
+    cols=[c for c in order if c in tab.columns]
+    return tab[cols].round(1) if cols else pd.DataFrame()
+
+def plot_usage_by_count(df, name):
+    tab=build_usage_by_count(df)
+    fig, ax = setup_savant_fig((11, 0.55*max(len(tab),4)+2))
+    if tab.empty:
+        ax.text(.5,.5,"Balls/Strikes columns required",ha="center",va="center",
+                color=SAVANT_GREY,transform=ax.transAxes)
+        ax.axis("off"); return fig
+    im=ax.imshow(tab.values,cmap="Blues",aspect="auto",vmin=0,vmax=max(tab.values.max(),1))
+    ax.set_xticks(range(len(tab.columns)),tab.columns,fontsize=8.5)
+    ax.set_yticks(range(len(tab.index)),tab.index,fontsize=8.5)
+    for i in range(tab.shape[0]):
+        for j in range(tab.shape[1]):
+            v=tab.values[i,j]
+            if v>0:
+                ax.text(j,i,f"{v:.0f}",ha="center",va="center",fontsize=7.5,
+                        color="#ffffff" if v>tab.values.max()*0.6 else SAVANT_TEXT)
+    ax.set_xlabel("Count (Balls-Strikes)",fontsize=9)
+    savant_title(ax,"Pitch Usage % by Count",name)
+    ax.grid(False)
+    for s in ax.spines.values(): s.set_visible(False)
+    cb=fig.colorbar(im,ax=ax,pad=0.02,shrink=0.8); cb.set_label("Usage %",fontsize=8)
+    return fig
+
+def plot_rolling_ev(df, name, window=15):
+    """Rolling exit-velocity trend over batted balls, chronological."""
+    fig, ax = setup_savant_fig((11, 3.8))
+    bip=df[batted_ball_mask(df)].dropna(subset=["ExitSpeed"]).copy()
+    if "Date" in bip.columns: bip=bip.sort_values("Date")
+    if len(bip)<5:
+        ax.text(.5,.5,"Need ≥ 5 batted balls",ha="center",va="center",
+                color=SAVANT_GREY,transform=ax.transAxes)
+        return fig
+    ev=bip["ExitSpeed"].reset_index(drop=True)
+    roll=ev.rolling(window,min_periods=max(3,window//3)).mean()
+    x=np.arange(1,len(ev)+1)
+    ax.scatter(x,ev,s=16,color=SAVANT_BLUE,alpha=0.35,edgecolors="none",zorder=3,label="Batted ball EV")
+    ax.plot(x,roll,color=SAVANT_RED,lw=2.2,zorder=5,label=f"Rolling avg ({window} BIP)")
+    ax.axhline(ev.mean(),color=SAVANT_GREY,lw=1.1,linestyle="--",zorder=2,label=f"Season avg {ev.mean():.1f}")
+    ax.set_xlabel("Batted ball # (chronological)",fontsize=9)
+    ax.set_ylabel("Exit Velocity (mph)",fontsize=9)
+    savant_title(ax,"Rolling Exit Velocity",name)
+    style_savant_ax(ax)
+    ax.legend(fontsize=8,framealpha=0.6,edgecolor="none",facecolor="none",labelcolor=SAVANT_TEXT)
+    return fig
+
+def plot_location_by_pitch(df, name, max_types=6):
+    """Small-multiple location heatmaps, one per pitch type."""
+    loc=df.dropna(subset=["PlateLocSide","PlateLocHeight"])
+    types=(loc["TaggedPitchType"].value_counts().head(max_types).index.tolist()
+           if not loc.empty else [])
+    n=len(types)
+    if n==0:
+        fig, ax = setup_savant_fig((6,4))
+        ax.text(.5,.5,"No location data",ha="center",va="center",
+                color=SAVANT_GREY,transform=ax.transAxes)
+        ax.axis("off"); return fig
+    ncols=min(n,3); nrows=int(np.ceil(n/ncols))
+    fig, axes = plt.subplots(nrows,ncols,figsize=(3.6*ncols,4.2*nrows),layout="constrained")
+    fig.patch.set_facecolor(SAVANT_BG)
+    axes=np.atleast_1d(axes).ravel()
+    for ax,pt in zip(axes,types):
+        g=loc[loc["TaggedPitchType"]==pt]
+        ax.set_facecolor(SAVANT_BG)
+        if len(g)>=5:
+            try:
+                sns.kdeplot(data=g,x="PlateLocSide",y="PlateLocHeight",fill=True,
+                            cmap="RdYlBu_r",alpha=0.65,levels=10,thresh=0.05,ax=ax)
+            except Exception: pass
+        ax.scatter(g["PlateLocSide"],g["PlateLocHeight"],s=8,color=SAVANT_TEXT,
+                   alpha=0.25,edgecolors="none",zorder=5)
+        draw_savant_zone(ax); draw_plate(ax)
+        ax.set_xlim(-2.5,2.5); ax.set_ylim(0.3,5.0)
+        ax.set_title(f"{pt} (n={len(g)})",fontsize=9,fontweight="bold",color=SAVANT_TEXT)
+        ax.set_xlabel(""); ax.set_ylabel("")
+        style_savant_ax(ax)
+        ax.set_aspect("equal",adjustable="box")
+    for ax in axes[n:]: ax.axis("off")
+    fig.suptitle(f"Location by Pitch Type — {name}",fontsize=11,fontweight="bold",color=SAVANT_TEXT)
+    return fig
+
+# ══════════════════════════════════════════════════════════════════════════════
+# TOP PLAYS v4.2 — leaderboards, quick questions & social-media cards
+# ══════════════════════════════════════════════════════════════════════════════
+def _lb_cols(df, wanted):
+    return [c for c in wanted if c in df.columns]
+
+def top_hardest_hits(df, n=10, unique_player=False):
+    if "ExitSpeed" not in df.columns: return pd.DataFrame()
+    bip=df[batted_ball_mask(df)].dropna(subset=["ExitSpeed"]).copy()
+    if bip.empty: return pd.DataFrame()
+    bip=bip.sort_values("ExitSpeed",ascending=False)
+    if unique_player and "Batter" in bip.columns:
+        bip=bip.drop_duplicates(subset=["Batter"])
+    cols=_lb_cols(bip,["Batter","ExitSpeed","Angle","Distance","PlayResult","Pitcher","Stadium","Date"])
+    out=bip[cols].head(n).reset_index(drop=True)
+    if "Date" in out.columns: out["Date"]=pd.to_datetime(out["Date"]).dt.strftime("%b %d")
+    return out
+
+def top_longest_hrs(df, n=10, unique_player=False):
+    if "PlayResult" not in df.columns: return pd.DataFrame()
+    hrs=df[df["PlayResult"].astype(str)=="HR"].copy()
+    if hrs.empty: return pd.DataFrame()
+    sort_col="Distance" if "Distance" in hrs.columns and hrs["Distance"].notna().any() else "ExitSpeed"
+    if sort_col not in hrs.columns: return pd.DataFrame()
+    hrs=hrs.dropna(subset=[sort_col]).sort_values(sort_col,ascending=False)
+    if unique_player and "Batter" in hrs.columns:
+        hrs=hrs.drop_duplicates(subset=["Batter"])
+    cols=_lb_cols(hrs,["Batter","Distance","ExitSpeed","Angle","Pitcher","Stadium","Date"])
+    out=hrs[cols].head(n).reset_index(drop=True)
+    if "Date" in out.columns: out["Date"]=pd.to_datetime(out["Date"]).dt.strftime("%b %d")
+    return out
+
+def top_fastest_pitches(df, n=10, unique_player=False):
+    if "RelSpeed" not in df.columns: return pd.DataFrame()
+    p=df.dropna(subset=["RelSpeed"]).sort_values("RelSpeed",ascending=False).copy()
+    if p.empty: return pd.DataFrame()
+    if unique_player and "Pitcher" in p.columns:
+        p=p.drop_duplicates(subset=["Pitcher"])
+    cols=_lb_cols(p,["Pitcher","RelSpeed","TaggedPitchType","SpinRate","PitchCall","Stadium","Date"])
+    out=p[cols].head(n).reset_index(drop=True)
+    if "Date" in out.columns: out["Date"]=pd.to_datetime(out["Date"]).dt.strftime("%b %d")
+    return out
+
+def top_spin_pitches(df, n=10, unique_player=False):
+    if "SpinRate" not in df.columns: return pd.DataFrame()
+    p=df.dropna(subset=["SpinRate"]).sort_values("SpinRate",ascending=False).copy()
+    if p.empty: return pd.DataFrame()
+    if unique_player and "Pitcher" in p.columns:
+        p=p.drop_duplicates(subset=["Pitcher"])
+    cols=_lb_cols(p,["Pitcher","SpinRate","TaggedPitchType","RelSpeed","Stadium","Date"])
+    out=p[cols].head(n).reset_index(drop=True)
+    if "Date" in out.columns: out["Date"]=pd.to_datetime(out["Date"]).dt.strftime("%b %d")
+    return out
+
+def top_barrels_lb(df, n=10, unique_player=False, barrel_base=98):
+    bm=barrel_mask(df,barrel_base)&batted_ball_mask(df)
+    b=df[bm].copy()
+    if b.empty or "ExitSpeed" not in b.columns: return pd.DataFrame()
+    b=b.sort_values("ExitSpeed",ascending=False)
+    if unique_player and "Batter" in b.columns:
+        b=b.drop_duplicates(subset=["Batter"])
+    cols=_lb_cols(b,["Batter","ExitSpeed","Angle","Distance","PlayResult","Stadium","Date"])
+    out=b[cols].head(n).reset_index(drop=True)
+    if "Date" in out.columns: out["Date"]=pd.to_datetime(out["Date"]).dt.strftime("%b %d")
+    return out
+
+QUICK_QUESTIONS={
+    "🔥 ¿Cuáles fueron los batazos más fuertes?":
+        {"fn":top_hardest_hits,"player_col":"Batter","value_col":"ExitSpeed",
+         "unit":"mph","title":"BATAZOS MÁS FUERTES","accent":"#ff4d4d"},
+    "🚀 ¿Cuáles fueron los HRs más largos?":
+        {"fn":top_longest_hrs,"player_col":"Batter","value_col":"Distance",
+         "unit":"ft","title":"HOME RUNS MÁS LARGOS","accent":"#ffb347"},
+    "⚡ ¿Cuáles fueron los lanzamientos más rápidos?":
+        {"fn":top_fastest_pitches,"player_col":"Pitcher","value_col":"RelSpeed",
+         "unit":"mph","title":"LANZAMIENTOS MÁS RÁPIDOS","accent":"#4da6ff"},
+    "🌪️ ¿Quién generó más spin?":
+        {"fn":top_spin_pitches,"player_col":"Pitcher","value_col":"SpinRate",
+         "unit":"rpm","title":"MAYOR SPIN RATE","accent":"#b98aff"},
+    "🎯 ¿Cuáles fueron los mejores barrels?":
+        {"fn":top_barrels_lb,"player_col":"Batter","value_col":"ExitSpeed",
+         "unit":"mph","title":"MEJORES BARRELS","accent":"#3ddc84"},
+}
+
+def make_social_card(lb, meta, subtitle, tournament=""):
+    """
+    1080×1080 social-media-ready graphic (dark theme) with the top-5 plays.
+    Readable by anyone: rank, player, big value, context line.
+    """
+    BG,FG,SUB="#0d1b2a","#ffffff","#8ea8c3"
+    accent=meta["accent"]
+    fig=plt.figure(figsize=(10.8,10.8),dpi=100)
+    fig.patch.set_facecolor(BG)
+    ax=fig.add_axes([0,0,1,1]); ax.set_xlim(0,1); ax.set_ylim(0,1)
+    ax.axis("off"); ax.set_facecolor(BG)
+    ax.add_patch(patches.Rectangle((0,0.90),1,0.10,color=accent,alpha=0.14))
+    ax.add_patch(patches.Rectangle((0,0.90),0.012,0.10,color=accent))
+    ax.text(0.05,0.955,"TRACKMAN · TOP PLAYS",fontsize=15,color=SUB,fontweight="bold",va="center")
+    ax.text(0.05,0.915,meta["title"],fontsize=30,color=FG,fontweight="bold",va="center")
+    line3=subtitle+(f"  ·  {tournament}" if tournament else "")
+    ax.text(0.05,0.868,line3,fontsize=13,color=SUB,va="center")
+    n=min(len(lb),5)
+    row_h=0.145
+    y0=0.80-(0.725-n*row_h)/2          # center the block when fewer than 5 rows
+    pcol=meta["player_col"]; vcol=meta["value_col"]
+    for i in range(n):
+        r=lb.iloc[i]; y=y0-i*row_h
+        ax.add_patch(patches.FancyBboxPatch((0.045,y-row_h+0.028),0.91,row_h-0.036,
+            boxstyle="round,pad=0.008",linewidth=1.2,
+            edgecolor=accent if i==0 else "#22334a",
+            facecolor="#13263d" if i==0 else "#102135"))
+        ax.text(0.085,y-row_h/2+0.01,f"{i+1}",fontsize=30,color=accent,
+                fontweight="bold",ha="center",va="center")
+        player=str(r.get(pcol,"—"))
+        ax.text(0.13,y-row_h/2+0.032,player,fontsize=19,color=FG,fontweight="bold",va="center")
+        bits=[]
+        for c,suf in [("TaggedPitchType",""),("PlayResult",""),("Angle","° LA"),("Stadium",""),("Date","")]:
+            v=r.get(c)
+            if v is not None and str(v) not in ("nan","—","NaT","None",""):
+                bits.append(f"{v:.0f}{suf}" if isinstance(v,(int,float,np.floating)) else str(v))
+        ax.text(0.13,y-row_h/2-0.026,"  ·  ".join(bits[:4]),fontsize=11.5,color=SUB,va="center")
+        val=r.get(vcol)
+        vtxt=f"{val:.1f}" if isinstance(val,(int,float,np.floating)) else str(val)
+        ax.text(0.885,y-row_h/2+0.012,vtxt,fontsize=28,color=accent,
+                fontweight="bold",ha="right",va="center")
+        ax.text(0.885,y-row_h/2-0.032,meta["unit"],fontsize=11,color=SUB,ha="right",va="center")
+    ax.text(0.5,0.035,"Generado con Trackman Analytics v4.2",fontsize=10,
+            color=SUB,alpha=0.6,ha="center")
+    return fig
+
+def render_top_plays(df, lmeta, tournament=""):
+    st.markdown('<div class="sh">🔥 Top Plays — Contenido para redes</div>',unsafe_allow_html=True)
+    if df["Date"].notna().any():
+        max_d=df["Date"].max()
+        period=st.radio("Periodo",["Última semana","Últimos 14 días","Últimos 30 días","Todo"],
+                        horizontal=True,key="tp_period")
+        days={"Última semana":7,"Últimos 14 días":14,"Últimos 30 días":30}.get(period)
+        sub=df[df["Date"]>=max_d-pd.Timedelta(days=days)] if days else df
+        dr=(f"{sub['Date'].min().strftime('%b %d')} – {sub['Date'].max().strftime('%b %d, %Y')}"
+            if sub["Date"].notna().any() else "Todas las fechas")
+    else:
+        sub=df; dr="Todas las fechas"
+        st.caption("Sin columna de fecha válida — mostrando todo el dataset.")
+    c1,c2,c3=st.columns([3,1,1])
+    with c1:
+        q=st.selectbox("Pregúntale a los datos",list(QUICK_QUESTIONS.keys()),key="tp_q")
+    with c2:
+        topn=st.number_input("Top N",3,25,10,key="tp_n")
+    with c3:
+        uniq=st.checkbox("1 por jugador",value=True,key="tp_uniq",
+                         help="Muestra solo la mejor jugada de cada jugador")
+    meta=QUICK_QUESTIONS[q]
+    kw={"n":int(topn),"unique_player":uniq}
+    if meta["fn"] is top_barrels_lb: kw["barrel_base"]=lmeta.get("barrel_ev",98)
+    lb=meta["fn"](sub,**kw)
+    if lb.empty:
+        st.warning("No hay datos suficientes para esta pregunta en el periodo seleccionado.")
+        return
+    st.markdown(f'<div class="sh">{meta["title"]} · {dr}</div>',unsafe_allow_html=True)
+    st.dataframe(lb,use_container_width=True)
+    csv_dl(lb,"top_plays.csv")
+    if "Stadium" in sub.columns and sub["Stadium"].nunique()>1:
+        with st.expander("🏟️ Ver top por estadio / región"):
+            for stad,grp in sub.groupby("Stadium"):
+                if stad in ("Unknown","Nan",""): continue
+                kw_s=dict(kw); kw_s["n"]=min(int(topn),5)
+                lb_s=meta["fn"](grp,**kw_s)
+                if lb_s.empty: continue
+                st.markdown(f"**{stad}**")
+                st.dataframe(lb_s,use_container_width=True)
+    st.markdown('<div class="sh">📱 Tarjeta para redes sociales</div>',unsafe_allow_html=True)
+    fig_card=make_social_card(lb,meta,dr,tournament)
+    cl,cr=st.columns([2,1])
+    with cl: st.pyplot(fig_card,use_container_width=True)
+    with cr:
+        st.caption("Imagen 1080×1080 lista para Instagram / X / Facebook.")
+        buf=io.BytesIO()
+        fig_card.savefig(buf,format="png",dpi=100,facecolor=fig_card.get_facecolor())
+        buf.seek(0)
+        st.download_button("⬇️ Descargar PNG",buf.read(),
+                           f"top_plays_{meta['value_col'].lower()}.png","image/png")
+    plt.close(fig_card)
+
+# ══════════════════════════════════════════════════════════════════════════════
 # PDF EXPORT (fixed for matplotlib 3.8+)
 # ══════════════════════════════════════════════════════════════════════════════
 def _fig_to_img(src_fig):
@@ -834,7 +1232,7 @@ def _pdf_cover(pdf, name, date_range, dtype):
             ha="center",va="center",fontsize=12,color=SAVANT_GREY)
     ax.text(0.5,0.52,f"Date Range: {date_range}",transform=ax.transAxes,
             ha="center",va="center",fontsize=10,color=SAVANT_GREY)
-    ax.text(0.5,0.22,"Generated by Trackman Analytics Dashboard v4.1 (Savant Edition)",
+    ax.text(0.5,0.22,"Generated by Trackman Analytics Dashboard v4.2 (Savant Edition)",
             transform=ax.transAxes,ha="center",va="center",
             fontsize=9,color=SAVANT_GREY,alpha=0.6)
     pdf.savefig(fig,bbox_inches="tight",facecolor=SAVANT_BG); plt.close(fig)
@@ -957,28 +1355,32 @@ def render_pitching(df, master_df, lmeta):
         fig_kde=plot_hot_zone(pf,selected)
         with cl: st.pyplot(fig_loc,use_container_width=True)
         with cr: st.pyplot(fig_kde,use_container_width=True)
+        st.markdown('<div class="sh">Location by Pitch Type</div>',unsafe_allow_html=True)
+        fig_bytype=plot_location_by_pitch(pf,selected)
+        st.pyplot(fig_bytype,use_container_width=True); plt.close(fig_bytype)
     with tab3:
         fig_vel=plot_velocity_tendency(pf,selected)
         st.pyplot(fig_vel,use_container_width=True)
+        st.markdown("<br>",unsafe_allow_html=True)
+        fig_usage=plot_usage_by_count(pf,selected)
+        st.pyplot(fig_usage,use_container_width=True); plt.close(fig_usage)
         st.markdown("<br>",unsafe_allow_html=True)
         fig_mov=plot_movement_profile(pf,selected)
         st.pyplot(fig_mov,use_container_width=True)
     with tab4:
         st.info("Stadium analysis coming soon.")
     st.markdown('<div class="sh">📤 Export</div>',unsafe_allow_html=True)
-    if "summary_df" not in locals(): summary_df=build_pitch_summary(pf)
-    if "disc_df" not in locals(): disc_df=compute_pitch_discipline(pf)
-    if "fig_loc" not in locals(): fig_loc=plot_pitch_locations(pf,selected)
-    if "fig_kde" not in locals(): fig_kde=plot_hot_zone(pf,selected)
-    if "fig_vel" not in locals(): fig_vel=plot_velocity_tendency(pf,selected)
-    if "fig_mov" not in locals(): fig_mov=plot_movement_profile(pf,selected)
     dr=f"{df['Date'].min().date()}→{df['Date'].max().date()}" if df["Date"].notna().any() else "All dates"
     ec1,ec2=st.columns(2)
     with ec1:
-        pdf_b=export_pitching_pdf(selected,summary_df,
-                                   disc_df if not disc_df.empty else pd.DataFrame(),
-                                   fig_loc,fig_kde,fig_vel,fig_mov,dr)
-        st.download_button("⬇️ PDF Report",pdf_b,f"{selected}_pitching.pdf","application/pdf")
+        # v4.2: PDF built only on demand — avoids regenerating on every rerun
+        if st.button("📄 Build PDF Report",key="btn_pdf_pitch"):
+            with st.spinner("Building PDF…"):
+                pdf_b=export_pitching_pdf(selected,summary_df,
+                                           disc_df if not disc_df.empty else pd.DataFrame(),
+                                           fig_loc,fig_kde,fig_vel,fig_mov,dr)
+            st.download_button("⬇️ Download PDF",pdf_b,f"{selected}_pitching.pdf",
+                               "application/pdf",key="dl_pdf_pitch")
     with ec2:
         csv_dl(pf,f"{selected}_raw.csv","⬇️ Raw CSV")
     for f in [fig_loc,fig_kde,fig_vel,fig_mov]: plt.close(f)
@@ -999,26 +1401,28 @@ def render_hitting(df, master_df, lmeta):
     selected=player_search_select(batters,"Select Batter","batter")
     bdf=df[df["Batter"]==selected].copy(); n=len(bdf)
     if n<15: st.warning(f"⚠️ **{selected}** — only **{n}** pitches (min: 15).")
-    avg_ev=bdf["ExitSpeed"].mean() if "ExitSpeed" in bdf.columns else np.nan
-    max_ev=bdf["ExitSpeed"].max() if "ExitSpeed" in bdf.columns else np.nan
-    avg_la=bdf["Angle"].mean() if "Angle" in bdf.columns else np.nan
+    barrel_base=lmeta.get("barrel_ev",98)
+    bip=batted_ball_mask(bdf); n_bip=int(bip.sum())
+    avg_ev=bdf.loc[bip,"ExitSpeed"].mean() if "ExitSpeed" in bdf.columns else np.nan
+    max_ev=bdf.loc[bip,"ExitSpeed"].max() if "ExitSpeed" in bdf.columns else np.nan
+    avg_la=bdf.loc[bip,"Angle"].mean() if "Angle" in bdf.columns else np.nan
     hh_rate=barrel_rate=0.0
     if "ExitSpeed" in bdf.columns:
-        ev_s=bdf["ExitSpeed"].dropna()
-        hh_rate=safe_pct((ev_s>=EV_HARD).sum(),len(ev_s))
-    if "ExitSpeed" in bdf.columns and "Angle" in bdf.columns:
-        barrel=((bdf["ExitSpeed"].fillna(0)>=EV_ELITE)&
-                (bdf["Angle"].fillna(-999)>=8)&
-                (bdf["Angle"].fillna(-999)<=32)).sum()
-        barrel_rate=safe_pct(barrel,n)
+        ev_s=bdf.loc[bip,"ExitSpeed"].dropna()
+        hh_rate=safe_pct(int((ev_s>=EV_HARD).sum()),max(len(ev_s),1))
+    if "ExitSpeed" in bdf.columns and "Angle" in bdf.columns and n_bip:
+        # v4.2: dynamic Savant barrel over batted balls (not all pitches)
+        barrel_rate=safe_pct(int(barrel_mask(bdf[bip],barrel_base).sum()),n_bip)
     disc=compute_plate_discipline_batter(bdf)
-    c1,c2,c3,c4,c5,c6=st.columns(6)
-    with c1: st.metric("Pitches",f"{n:,}")
-    with c2: st.metric("Avg EV",fmt(avg_ev," mph"),delta=f"Max {max_ev:.1f}" if not np.isnan(max_ev) else None)
+    pa=count_pa(bdf); woba=compute_woba(bdf)
+    c1,c2,c3,c4,c5,c6,c7=st.columns(7)
+    with c1: st.metric("Pitches",f"{n:,}",delta=f"{pa} PA" if pa else None,delta_color="off")
+    with c2: st.metric("Avg EV",fmt(avg_ev," mph"),delta=f"Max {max_ev:.1f}" if not (isinstance(max_ev,float) and np.isnan(max_ev)) else None)
     with c3: st.metric("Avg LA",fmt(avg_la,"°"))
     with c4: st.metric("HH %",f"{hh_rate:.1f}%")
     with c5: st.metric("Barrel %",f"{barrel_rate:.1f}%")
-    with c6: st.metric("Dates",str(bdf["Date"].dt.date.nunique()) if "Date" in bdf.columns else "—")
+    with c6: st.metric("wOBA",fmt(woba,"",3))
+    with c7: st.metric("Dates",str(bdf["Date"].dt.date.nunique()) if "Date" in bdf.columns else "—")
     st.markdown("<br>",unsafe_allow_html=True)
     if disc:
         st.markdown('<div class="sh">🎯 Plate Discipline</div>',unsafe_allow_html=True)
@@ -1031,14 +1435,17 @@ def render_hitting(df, master_df, lmeta):
     tab1,tab2,tab3,tab4,tab5,tab6=st.tabs([
         "📅 Monthly","🔄 Splits","📋 Results","🗺️ Spray","📊 Distributions","🏟️ Stadium"])
     with tab1:
-        monthly_df=build_hitting_monthly(bdf)
+        monthly_df=build_hitting_monthly(bdf,lmeta)
         if monthly_df.empty: st.info("No monthly data.")
         else:
             st.dataframe(monthly_df,use_container_width=True,hide_index=True)
             csv_dl(monthly_df,f"{selected}_monthly.csv")
+        st.markdown("<br>",unsafe_allow_html=True)
+        fig_roll=plot_rolling_ev(bdf,selected)
+        st.pyplot(fig_roll,use_container_width=True); plt.close(fig_roll)
     with tab2:
         st.markdown('<div class="sh">vs RHP / LHP</div>',unsafe_allow_html=True)
-        split_df=build_split_table(bdf)
+        split_df=build_split_table(bdf,ev_hard=EV_HARD)
         if split_df.empty: st.info("PitcherThrows column required.")
         else:
             st.dataframe(split_df,use_container_width=True,hide_index=True)
@@ -1077,20 +1484,16 @@ def render_hitting(df, master_df, lmeta):
     with tab6:
         st.info("Stadium analysis coming soon.")
     st.markdown('<div class="sh">📤 Export</div>',unsafe_allow_html=True)
-    if "monthly_df" not in locals(): monthly_df=build_hitting_monthly(bdf)
-    if "result_df" not in locals(): result_df=build_play_result_table(bdf)
-    if "split_df" not in locals(): split_df=build_split_table(bdf)
-    if "fig_spray" not in locals(): fig_spray=plot_spray_chart(bdf,selected)
-    if "fig_dmg" not in locals(): fig_dmg=plot_damage_zone(bdf,selected)
-    if "fig_ev" not in locals(): fig_ev=plot_ev_distribution(bdf,selected)
-    if "fig_la" not in locals(): fig_la=plot_la_distribution(bdf,selected)
-    if "fig_ev_la" not in locals(): fig_ev_la=plot_ev_la_scatter(bdf,selected)
     dr=f"{df['Date'].min().date()}→{df['Date'].max().date()}" if df["Date"].notna().any() else "All dates"
     ec1,ec2=st.columns(2)
     with ec1:
-        pdf_b=export_hitting_pdf(selected,monthly_df,disc,result_df,split_df,
-                                  fig_spray,fig_dmg,fig_ev,fig_la,fig_ev_la,dr)
-        st.download_button("⬇️ PDF Report",pdf_b,f"{selected}_hitting.pdf","application/pdf")
+        # v4.2: PDF built only on demand — avoids regenerating on every rerun
+        if st.button("📄 Build PDF Report",key="btn_pdf_hit"):
+            with st.spinner("Building PDF…"):
+                pdf_b=export_hitting_pdf(selected,monthly_df,disc,result_df,split_df,
+                                          fig_spray,fig_dmg,fig_ev,fig_la,fig_ev_la,dr)
+            st.download_button("⬇️ Download PDF",pdf_b,f"{selected}_hitting.pdf",
+                               "application/pdf",key="dl_pdf_hit")
     with ec2:
         csv_dl(bdf,f"{selected}_raw.csv","⬇️ Raw CSV")
     for f in [fig_spray,fig_dmg,fig_ev,fig_la,fig_ev_la]: plt.close(f)
@@ -1113,7 +1516,7 @@ def render_league(df, lmeta):
                 csv_dl(lp,"league_pitching.csv")
         with c2:
             st.markdown('<div class="sh">🏏 Hitting</div>',unsafe_allow_html=True)
-            lh=build_league_hitting_avg(df)
+            lh=build_league_hitting_avg(df,lmeta)
             if lh.empty: st.info("Insufficient data.")
             else:
                 st.dataframe(lh,use_container_width=True,hide_index=True)
@@ -1133,7 +1536,7 @@ def main():
       <div class="hero-icon">⚾</div>
       <div>
         <div class="hero-title">Trackman <span class="hl">Analytics</span>
-          <span style="font-size:.9rem;opacity:.35;font-weight:400"> v4.1 (Savant)</span></div>
+          <span style="font-size:.9rem;opacity:.35;font-weight:400"> v4.2 (Savant)</span></div>
         <div class="hero-sub">
           Professional baseball analytics with Baseball Savant–inspired design
         </div>
@@ -1141,33 +1544,82 @@ def main():
           <span class="pill">🔍 Player Search</span><span class="pill">📊 League Avg</span>
           <span class="pill">🔄 RHP / LHP</span><span class="pill">🎯 Play Results</span>
           <span class="pill">📈 Hit Quality</span><span class="pill">PDF Export</span>
+          <span class="pill">🔥 Top Plays</span><span class="pill">🏆 Torneos en vivo</span>
         </div>
       </div>
     </div>
     """,unsafe_allow_html=True)
 
     st.sidebar.markdown('<span class="sb-label">📂 Data</span>',unsafe_allow_html=True)
-    uploaded=st.sidebar.file_uploader("Upload Trackman CSV",type=["csv"],
-                                      accept_multiple_files=True)
-    if not uploaded:
-        st.markdown("""
-        <div style="border:2px dashed #d0d0d0;border-radius:8px;padding:60px 36px;
-          text-align:center;margin-top:24px">
-          <div style="font-size:2.8rem;margin-bottom:10px">📂</div>
-          <div style="font-size:1.2rem;font-weight:700;margin-bottom:8px">
-            Upload your Trackman CSVs to begin</div>
-          <div style="font-size:.88rem;opacity:.55;line-height:1.6">
-            Supports one or multiple files · Pro and amateur data welcome<br>
-            The dashboard auto-merges, cleans, and deduplicates player names
-          </div>
-        </div>""",unsafe_allow_html=True)
-        return
-
-    # ── Cache-busting: hash actual file contents so swapping a file always re-parses ──
-    import hashlib
-    file_bytes=[f.read() for f in uploaded]
-    file_names=[f.name for f in uploaded]
-    cache_key=hashlib.md5(b"".join(file_bytes)).hexdigest()
+    import hashlib, os, glob
+    source=st.sidebar.radio("src",["⬆️ Upload CSVs","🏆 Tournament Folder"],
+                            horizontal=True,key="data_source",label_visibility="collapsed")
+    tournament=""
+    if source=="⬆️ Upload CSVs":
+        uploaded=st.sidebar.file_uploader("Upload Trackman CSV",type=["csv"],
+                                          accept_multiple_files=True)
+        if not uploaded:
+            st.markdown("""
+            <div style="border:2px dashed #d0d0d0;border-radius:8px;padding:60px 36px;
+              text-align:center;margin-top:24px">
+              <div style="font-size:2.8rem;margin-bottom:10px">📂</div>
+              <div style="font-size:1.2rem;font-weight:700;margin-bottom:8px">
+                Upload your Trackman CSVs to begin</div>
+              <div style="font-size:.88rem;opacity:.55;line-height:1.6">
+                Supports one or multiple files · Pro and amateur data welcome<br>
+                Or switch to 🏆 Tournament Folder to watch a live folder
+              </div>
+            </div>""",unsafe_allow_html=True)
+            return
+        # ── Cache-busting: hash actual file contents so swapping a file always re-parses ──
+        file_bytes=[f.read() for f in uploaded]
+        file_names=[f.name for f in uploaded]
+        cache_key=hashlib.md5(b"".join(file_bytes)).hexdigest()
+        n_files=len(uploaded)
+    else:
+        # ── v4.2 Tournament folders: point the app at a folder on this computer.
+        #    Each subfolder = a tournament. The cache key includes each file's
+        #    modification time, so editing/adding a CSV updates the app on the
+        #    next interaction — no manual cache clearing needed.
+        base=st.sidebar.text_input("Carpeta base de torneos",
+                                   placeholder="/Users/tu-usuario/Torneos",
+                                   key="tm_base_path")
+        if not base or not os.path.isdir(os.path.expanduser(base)):
+            st.markdown("""
+            <div style="border:2px dashed #d0d0d0;border-radius:8px;padding:60px 36px;
+              text-align:center;margin-top:24px">
+              <div style="font-size:2.8rem;margin-bottom:10px">🏆</div>
+              <div style="font-size:1.2rem;font-weight:700;margin-bottom:8px">
+                Escribe la ruta de tu carpeta de torneos</div>
+              <div style="font-size:.88rem;opacity:.55;line-height:1.6">
+                Cada subcarpeta es un torneo con sus CSVs de Trackman<br>
+                Si actualizas un archivo, el app se refresca automáticamente
+              </div>
+            </div>""",unsafe_allow_html=True)
+            return
+        base=os.path.expanduser(base)
+        subdirs=sorted(d for d in os.listdir(base)
+                       if os.path.isdir(os.path.join(base,d)) and not d.startswith("."))
+        options=["📂 Toda la carpeta"]+subdirs
+        choice=st.sidebar.selectbox("🏆 Torneo",options,key="tm_tournament")
+        folder=base if choice==options[0] else os.path.join(base,choice)
+        tournament="" if choice==options[0] else choice
+        paths=sorted(glob.glob(os.path.join(folder,"**","*.csv"),recursive=True))
+        if not paths:
+            st.warning(f"⚠️ No se encontraron CSVs en **{folder}**."); return
+        sig="|".join(f"{p}:{os.path.getmtime(p)}:{os.path.getsize(p)}" for p in paths)
+        cache_key=hashlib.md5(sig.encode()).hexdigest()
+        file_bytes=[]; file_names=[]
+        for p in paths:
+            try:
+                with open(p,"rb") as fh: file_bytes.append(fh.read())
+                file_names.append(os.path.basename(p))
+            except OSError as e:
+                st.sidebar.warning(f"No pude leer {os.path.basename(p)}: {e}")
+        n_files=len(file_names)
+        st.sidebar.caption(f"🏆 **{choice}** · {n_files} CSV(s) · "
+                           f"se actualiza solo al cambiar archivos")
+        if st.sidebar.button("🔄 Re-escanear carpeta"): st.rerun()
 
     # ── Play level selector ───────────────────────────────────────────────────────────
     st.sidebar.markdown('<span class="sb-label">🏟️ Play Level</span>',unsafe_allow_html=True)
@@ -1179,7 +1631,7 @@ def main():
     LEVEL_META={
         "⚾ Professional":{
             "label":"Professional",
-            "ev_elite":110, "ev_hard":95, "ev_avg":89,
+            "ev_elite":110, "ev_hard":95, "ev_avg":89, "barrel_ev":98,
             "velo_elite":97, "velo_avg":93,
             "barrel_note":"MLB barrel zone: ≥98 mph EV, 8°–32° LA",
             "zone_note":"MLB zone width ≈ 17 in (±0.71 ft)",
@@ -1187,7 +1639,7 @@ def main():
         },
         "🎓 Amateur / College":{
             "label":"College / JUCO",
-            "ev_elite":103, "ev_hard":90, "ev_avg":83,
+            "ev_elite":103, "ev_hard":90, "ev_avg":83, "barrel_ev":92,
             "velo_elite":92, "velo_avg":86,
             "barrel_note":"College barrel zone: ≥92 mph EV, 8°–32° LA",
             "zone_note":"NCAA zone similar to MLB",
@@ -1195,7 +1647,7 @@ def main():
         },
         "🏫 High School":{
             "label":"High School",
-            "ev_elite":95,  "ev_hard":83, "ev_avg":75,
+            "ev_elite":95,  "ev_hard":83, "ev_avg":75, "barrel_ev":85,
             "velo_elite":85,"velo_avg":77,
             "barrel_note":"HS barrel zone: ≥85 mph EV, 8°–32° LA",
             "zone_note":"Same strike zone dimensions",
@@ -1203,7 +1655,7 @@ def main():
         },
         "🔀 Mixed":{
             "label":"Mixed levels",
-            "ev_elite":105, "ev_hard":92, "ev_avg":85,
+            "ev_elite":105, "ev_hard":92, "ev_avg":85, "barrel_ev":95,
             "velo_elite":93,"velo_avg":87,
             "barrel_note":"Barrel zone: ≥95 mph EV, 8°–32° LA (blended)",
             "zone_note":"Standard strike zone",
@@ -1231,8 +1683,7 @@ def main():
     # Stamp level metadata onto master so downstream functions can use it
     master.attrs["level_meta"]=lmeta
 
-    total_files=len(uploaded)
-    st.sidebar.success(f"✅ **{len(master):,}** pitches · {total_files} file(s)")
+    st.sidebar.success(f"✅ **{len(master):,}** pitches · {n_files} file(s)")
     if pa+ba>0:
         st.sidebar.caption(f"🔗 Merged **{pa+ba}** name variants ({pa} P · {ba} B)")
 
@@ -1247,13 +1698,14 @@ def main():
     if filtered.empty: st.warning("⚠️ No data after filters."); return
 
     st.sidebar.markdown('<span class="sb-label">🎯 Mode</span>',unsafe_allow_html=True)
-    mode=st.sidebar.radio("m",["⚾ Pitching","🏏 Hitting","📊 League"],
+    mode=st.sidebar.radio("m",["⚾ Pitching","🏏 Hitting","📊 League","🔥 Top Plays"],
                           key="dash_mode",label_visibility="collapsed")
     st.sidebar.markdown("---")
-    st.sidebar.caption("v4.1 (Savant Edition) · Streamlit · Pandas · Matplotlib")
+    st.sidebar.caption("v4.2 (Savant Edition) · Streamlit · Pandas · Matplotlib")
 
     if mode=="⚾ Pitching": render_pitching(filtered,master,lmeta)
     elif mode=="🏏 Hitting": render_hitting(filtered,master,lmeta)
+    elif mode=="🔥 Top Plays": render_top_plays(filtered,lmeta,tournament)
     else: render_league(filtered,lmeta)
 
 if __name__=="__main__":
