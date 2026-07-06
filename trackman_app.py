@@ -1093,23 +1093,104 @@ def top_barrels_lb(df, n=10, unique_player=False, barrel_base=98):
     if "Date" in out.columns: out["Date"]=pd.to_datetime(out["Date"]).dt.strftime("%b %d")
     return out
 
-QUICK_QUESTIONS={
-    "🔥 ¿Cuáles fueron los batazos más fuertes?":
-        {"fn":top_hardest_hits,"player_col":"Batter","value_col":"ExitSpeed",
-         "unit":"mph","title":"BATAZOS MÁS FUERTES","accent":"#ff4d4d"},
-    "🚀 ¿Cuáles fueron los HRs más largos?":
-        {"fn":top_longest_hrs,"player_col":"Batter","value_col":"Distance",
-         "unit":"ft","title":"HOME RUNS MÁS LARGOS","accent":"#ffb347"},
-    "⚡ ¿Cuáles fueron los lanzamientos más rápidos?":
-        {"fn":top_fastest_pitches,"player_col":"Pitcher","value_col":"RelSpeed",
-         "unit":"mph","title":"LANZAMIENTOS MÁS RÁPIDOS","accent":"#4da6ff"},
-    "🌪️ ¿Quién generó más spin?":
-        {"fn":top_spin_pitches,"player_col":"Pitcher","value_col":"SpinRate",
-         "unit":"rpm","title":"MAYOR SPIN RATE","accent":"#b98aff"},
-    "🎯 ¿Cuáles fueron los mejores barrels?":
-        {"fn":top_barrels_lb,"player_col":"Batter","value_col":"ExitSpeed",
-         "unit":"mph","title":"MEJORES BARRELS","accent":"#3ddc84"},
+METRIC_META={
+    "ev":    {"fn":top_hardest_hits,"player_col":"Batter","value_col":"ExitSpeed",
+              "unit":"mph","title":"BATAZOS MÁS FUERTES","accent":"#ff4d4d"},
+    "hr":    {"fn":top_longest_hrs,"player_col":"Batter","value_col":"Distance",
+              "unit":"ft","title":"HOME RUNS MÁS LARGOS","accent":"#ffb347"},
+    "velo":  {"fn":top_fastest_pitches,"player_col":"Pitcher","value_col":"RelSpeed",
+              "unit":"mph","title":"LANZAMIENTOS MÁS RÁPIDOS","accent":"#4da6ff"},
+    "spin":  {"fn":top_spin_pitches,"player_col":"Pitcher","value_col":"SpinRate",
+              "unit":"rpm","title":"MAYOR SPIN RATE","accent":"#b98aff"},
+    "barrel":{"fn":top_barrels_lb,"player_col":"Batter","value_col":"ExitSpeed",
+              "unit":"mph","title":"MEJORES BARRELS","accent":"#3ddc84"},
 }
+QUICK_QUESTIONS={
+    "🔥 ¿Cuáles fueron los batazos más fuertes?":"ev",
+    "🚀 ¿Cuáles fueron los HRs más largos?":"hr",
+    "⚡ ¿Cuáles fueron los lanzamientos más rápidos?":"velo",
+    "🌪️ ¿Quién generó más spin?":"spin",
+    "🎯 ¿Cuáles fueron los mejores barrels?":"barrel",
+}
+
+def parse_question(q, stadiums=(), regions=(), players=()):
+    """
+    Lightweight ES/EN natural-language parser for free-text questions.
+    Understands: metric, 'top N', period (hoy/semana/mes/N días), 'en cada
+    región/estadio', a specific stadium/region name, and a player name.
+    Returns dict or None if no metric was recognized.
+    """
+    s=" "+_strip_accents(str(q).lower())+" "
+    toks=set(re.findall(r"[a-z0-9]+",s))
+    intent=None
+    if toks&{"jonron","jonrones","cuadrangular","cuadrangulares","hr","hrs","homerun","homeruns"} or "home run" in s:
+        intent="hr"
+    elif toks&{"barrel","barrels","barril","barriles"}: intent="barrel"
+    elif toks&{"spin","rotacion","giro","rpm"}: intent="spin"
+    elif toks&{"lanzamiento","lanzamientos","pitcheo","pitcheos","pitch","pitches",
+               "velocidad","rapido","rapidos","rapidas","recta","rectas","mph","tiro","tiros"}:
+        intent="velo"
+    elif toks&{"batazo","batazos","hit","hits","exit","fuerte","fuertes","duro","duros",
+               "contacto","contactos","ev","golpe","golpes"}:
+        intent="ev"
+    if intent is None: return None
+    n=10
+    m=(re.search(r"top\s*(\d+)",s) or re.search(r"(\d+)\s+mejores",s)
+       or re.search(r"mejores\s+(\d+)",s) or re.search(r"primeros\s+(\d+)",s))
+    if m: n=max(1,min(25,int(m.group(1))))
+    days=None
+    m=re.search(r"(\d+)\s*(dias|days)",s)
+    if m: days=int(m.group(1))
+    elif toks&{"hoy","today"}: days=1
+    elif toks&{"ayer","yesterday"}: days=2
+    elif toks&{"semana","semanal","week","weekly"}: days=7
+    elif toks&{"quincena","fortnight"}: days=14
+    elif toks&{"mes","mensual","month","monthly"}: days=30
+    per_group=bool(("cada" in toks or "por" in toks)
+                   and toks&{"region","regiones","estadio","estadios","zona","zonas"})
+    # Most-specific match wins (e.g. "Estadio Norte" beats region "Norte")
+    candidates=[]
+    for stx in stadiums:
+        nm=_strip_accents(str(stx).lower())
+        if stx and nm in s: candidates.append((len(nm),"Stadium",stx))
+    for r in regions:
+        nm=_strip_accents(str(r).lower())
+        if r and f" {nm} " in s.replace(",", " ").replace("?"," "):
+            candidates.append((len(nm),"Region",r))
+    area=None
+    if candidates:
+        _,col,val=max(candidates)
+        area=(col,val)
+    player=None
+    for p in players:
+        if p and _strip_accents(str(p).lower()) in s:
+            player=p; break
+    return {"intent":intent,"n":n,"days":days,"per_group":per_group,
+            "area":area,"player":player}
+
+def region_editor(df):
+    """Stadium→Region mapping: regions.csv from tournament folder + in-app editor."""
+    if "Stadium" not in df.columns: return {}
+    stadiums=sorted(x for x in df["Stadium"].dropna().unique()
+                    if x not in ("Unknown","Nan",""))
+    if not stadiums: return {}
+    csv_map=st.session_state.get("region_csv_map",{})
+    saved=st.session_state.get("region_map_saved",{})
+    base={s:saved.get(s,csv_map.get(s,"")) for s in stadiums}
+    with st.expander("🗺️ Configurar regiones (agrupa estadios)",expanded=False):
+        st.caption("Asigna una región a cada estadio para poder preguntar y filtrar por región. "
+                   "También puedes poner un **regions.csv** (columnas: Stadium,Region) "
+                   "en la carpeta del torneo y se carga solo.")
+        edit_df=pd.DataFrame({"Stadium":stadiums,"Region":[base[s] for s in stadiums]})
+        edited=st.data_editor(edit_df,hide_index=True,use_container_width=True,
+                              key="region_editor",disabled=["Stadium"])
+        mapping={r.Stadium:str(r.Region).strip() for r in edited.itertuples()
+                 if str(r.Region).strip() not in ("","nan","None")}
+        st.session_state["region_map_saved"]=mapping
+        if mapping:
+            csv_dl(pd.DataFrame({"Stadium":list(mapping),"Region":list(mapping.values())}),
+                   "regions.csv","⬇️ Guardar regions.csv")
+    return mapping
 
 def make_social_card(lb, meta, subtitle, tournament=""):
     """
@@ -1159,46 +1240,120 @@ def make_social_card(lb, meta, subtitle, tournament=""):
 
 def render_top_plays(df, lmeta, tournament=""):
     st.markdown('<div class="sh">🔥 Top Plays — Contenido para redes</div>',unsafe_allow_html=True)
+    # ── Regions: map stadiums → regions (regions.csv or in-app editor) ──
+    region_map=region_editor(df)
+    df=df.copy()
+    if region_map and "Stadium" in df.columns:
+        df["Region"]=df["Stadium"].map(region_map).fillna("Sin región")
+    regions=sorted(df["Region"].dropna().unique()) if "Region" in df.columns else []
+    stadiums=(sorted(x for x in df["Stadium"].dropna().unique() if x not in ("Unknown","Nan",""))
+              if "Stadium" in df.columns else [])
+    players=list(pd.unique(pd.concat([
+        df["Batter"].dropna() if "Batter" in df.columns else pd.Series(dtype=str),
+        df["Pitcher"].dropna() if "Pitcher" in df.columns else pd.Series(dtype=str)])))
+    # ── Free-text question OR quick question ──
+    free_q=st.text_input("✍️ Escribe tu pregunta",key="tp_free",
+        placeholder="Ej: top 5 batazos más fuertes de la semana en Estadio Norte · "
+                    "lanzamientos más rápidos en cada región")
+    q_preset=st.selectbox("…o elige una pregunta rápida",list(QUICK_QUESTIONS.keys()),key="tp_q")
+    parsed=None
+    if free_q.strip():
+        parsed=parse_question(free_q,stadiums=stadiums,regions=regions,players=players)
+        if parsed is None:
+            st.warning("No entendí la pregunta. Menciona una métrica: **batazos/fuertes**, "
+                       "**HRs/jonrones**, **lanzamientos/velocidad**, **spin** o **barrels**. "
+                       "Puedes agregar periodo (semana, mes, 10 días), 'top N', un jugador, "
+                       "un estadio o una región.")
+    intent=parsed["intent"] if parsed else QUICK_QUESTIONS[q_preset]
+    meta=METRIC_META[intent]
+    # ── Period ──
     if df["Date"].notna().any():
         max_d=df["Date"].max()
-        period=st.radio("Periodo",["Última semana","Últimos 14 días","Últimos 30 días","Todo"],
-                        horizontal=True,key="tp_period")
-        days={"Última semana":7,"Últimos 14 días":14,"Últimos 30 días":30}.get(period)
+        if parsed and parsed["days"]:
+            days=parsed["days"]
+            dr_note=f"últimos {days} días"
+        else:
+            period=st.radio("Periodo",["Última semana","Últimos 14 días","Últimos 30 días","Todo"],
+                            horizontal=True,key="tp_period")
+            days={"Última semana":7,"Últimos 14 días":14,"Últimos 30 días":30}.get(period)
+            dr_note=None
         sub=df[df["Date"]>=max_d-pd.Timedelta(days=days)] if days else df
         dr=(f"{sub['Date'].min().strftime('%b %d')} – {sub['Date'].max().strftime('%b %d, %Y')}"
             if sub["Date"].notna().any() else "Todas las fechas")
+        if dr_note: st.caption(f"📆 Periodo detectado en tu pregunta: **{dr_note}** ({dr})")
     else:
         sub=df; dr="Todas las fechas"
         st.caption("Sin columna de fecha válida — mostrando todo el dataset.")
-    c1,c2,c3=st.columns([3,1,1])
-    with c1:
-        q=st.selectbox("Pregúntale a los datos",list(QUICK_QUESTIONS.keys()),key="tp_q")
+    # ── Area filter (stadium/region) — from question or manual selector ──
+    area_label=""
+    if parsed and parsed["area"]:
+        col,val=parsed["area"]
+        if col in sub.columns:
+            sub=sub[sub[col]==val]; area_label=str(val)
+            st.caption(f"📍 Filtrado por {('región' if col=='Region' else 'estadio')}: **{val}**")
+    else:
+        fc1,fc2=st.columns(2)
+        with fc1:
+            if regions:
+                sel_r=st.multiselect("Filtrar por región",regions,key="tp_freg")
+                if sel_r:
+                    sub=sub[sub["Region"].isin(sel_r)]; area_label=", ".join(sel_r)
+        with fc2:
+            if stadiums:
+                sel_s=st.multiselect("Filtrar por estadio",stadiums,key="tp_fstad")
+                if sel_s:
+                    sub=sub[sub["Stadium"].isin(sel_s)]
+                    area_label=area_label or ", ".join(sel_s)
+    # ── Player filter from question ──
+    if parsed and parsed["player"]:
+        pcol=meta["player_col"]
+        if pcol in sub.columns:
+            sub=sub[sub[pcol]==parsed["player"]]
+            st.caption(f"👤 Solo jugadas de **{parsed['player']}**")
+    # ── Options ──
+    c2,c3=st.columns(2)
     with c2:
-        topn=st.number_input("Top N",3,25,10,key="tp_n")
+        topn=st.number_input("Top N",1,25,parsed["n"] if parsed else 10,key="tp_n")
     with c3:
-        uniq=st.checkbox("1 por jugador",value=True,key="tp_uniq",
+        uniq=st.checkbox("1 por jugador",value=not (parsed and parsed["player"]),key="tp_uniq",
                          help="Muestra solo la mejor jugada de cada jugador")
-    meta=QUICK_QUESTIONS[q]
     kw={"n":int(topn),"unique_player":uniq}
     if meta["fn"] is top_barrels_lb: kw["barrel_base"]=lmeta.get("barrel_ev",98)
     lb=meta["fn"](sub,**kw)
     if lb.empty:
-        st.warning("No hay datos suficientes para esta pregunta en el periodo seleccionado.")
+        st.warning("No hay datos suficientes para esta pregunta con los filtros actuales.")
         return
-    st.markdown(f'<div class="sh">{meta["title"]} · {dr}</div>',unsafe_allow_html=True)
+    st.markdown(f'<div class="sh">{meta["title"]}{" · "+area_label if area_label else ""} · {dr}</div>',
+                unsafe_allow_html=True)
     st.dataframe(lb,use_container_width=True)
     csv_dl(lb,"top_plays.csv")
-    if "Stadium" in sub.columns and sub["Stadium"].nunique()>1:
-        with st.expander("🏟️ Ver top por estadio / región"):
-            for stad,grp in sub.groupby("Stadium"):
-                if stad in ("Unknown","Nan",""): continue
+    # ── Breakdown per region/stadium ──
+    group_col="Region" if regions else "Stadium"
+    if regions and stadiums:
+        choice_g=st.radio("Desglosar por",["Región","Estadio"],horizontal=True,key="tp_grp")
+        group_col="Region" if choice_g=="Región" else "Stadium"
+    auto_open=bool(parsed and parsed["per_group"])
+    if group_col in sub.columns and sub[group_col].nunique()>1:
+        with st.expander(f"🏟️ Ver top en cada {'región' if group_col=='Region' else 'estadio'}",
+                         expanded=auto_open):
+            for area,grp in sub.groupby(group_col):
+                if str(area) in ("Unknown","Nan","","Sin región"): continue
                 kw_s=dict(kw); kw_s["n"]=min(int(topn),5)
                 lb_s=meta["fn"](grp,**kw_s)
                 if lb_s.empty: continue
-                st.markdown(f"**{stad}**")
+                st.markdown(f"**{area}**")
                 st.dataframe(lb_s,use_container_width=True)
+                bc=io.BytesIO()
+                fig_a=make_social_card(lb_s,meta,dr,f"{tournament+' · ' if tournament else ''}{area}")
+                fig_a.savefig(bc,format="png",dpi=100,facecolor=fig_a.get_facecolor())
+                plt.close(fig_a); bc.seek(0)
+                st.download_button(f"⬇️ Tarjeta PNG — {area}",bc.read(),
+                                   f"top_{intent}_{str(area).replace(' ','_')}.png","image/png",
+                                   key=f"dl_area_{intent}_{area}")
+    # ── Social card ──
     st.markdown('<div class="sh">📱 Tarjeta para redes sociales</div>',unsafe_allow_html=True)
-    fig_card=make_social_card(lb,meta,dr,tournament)
+    card_sub=dr+(f" · {area_label}" if area_label else "")
+    fig_card=make_social_card(lb,meta,card_sub,tournament)
     cl,cr=st.columns([2,1])
     with cl: st.pyplot(fig_card,use_container_width=True)
     with cr:
@@ -1604,9 +1759,23 @@ def main():
         choice=st.sidebar.selectbox("🏆 Torneo",options,key="tm_tournament")
         folder=base if choice==options[0] else os.path.join(base,choice)
         tournament="" if choice==options[0] else choice
-        paths=sorted(glob.glob(os.path.join(folder,"**","*.csv"),recursive=True))
+        paths=sorted(p for p in glob.glob(os.path.join(folder,"**","*.csv"),recursive=True)
+                     if os.path.basename(p).lower()!="regions.csv")
         if not paths:
             st.warning(f"⚠️ No se encontraron CSVs en **{folder}**."); return
+        # v4.2: optional regions.csv (Stadium,Region) in tournament or base folder
+        for cand in (os.path.join(folder,"regions.csv"),os.path.join(base,"regions.csv")):
+            if os.path.isfile(cand):
+                try:
+                    rm=pd.read_csv(cand)
+                    if {"Stadium","Region"}.issubset(rm.columns):
+                        st.session_state["region_csv_map"]=dict(zip(
+                            rm["Stadium"].astype(str).str.strip().str.title(),
+                            rm["Region"].astype(str).str.strip()))
+                        st.sidebar.caption(f"🗺️ regions.csv cargado ({len(rm)} estadios)")
+                except Exception as e:
+                    st.sidebar.warning(f"regions.csv inválido: {e}")
+                break
         sig="|".join(f"{p}:{os.path.getmtime(p)}:{os.path.getsize(p)}" for p in paths)
         cache_key=hashlib.md5(sig.encode()).hexdigest()
         file_bytes=[]; file_names=[]
