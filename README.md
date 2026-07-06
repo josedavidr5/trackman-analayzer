@@ -20,7 +20,11 @@ streamlit run trackman_app.py
 - **⚾ Pitching** — arsenal, disciplina, ubicaciones, heatmaps por tipo de pitcheo, uso por conteo, tendencia de velocidad, perfil de movimiento.
 - **🏏 Hitting** — progresión mensual, rolling EV, splits vs RHP/LHP, resultados de jugada, spray chart, damage zone, distribuciones EV/LA, wOBA.
 - **📊 League** — promedios de liga de pitcheo y bateo con benchmarks por nivel.
-- **🔥 Top Plays** — preguntas rápidas ("¿batazos más fuertes de la semana?", "¿lanzamientos más rápidos?"), rankings por periodo y por estadio, y **tarjetas 1080×1080 listas para redes sociales** (PNG descargable).
+- **🔥 Top Plays** — escribe tu propia pregunta en español o inglés ("top 5 batazos más fuertes de la semana en Estadio Norte", "lanzamientos más rápidos en cada región", "barrels de Pedro Ruiz este mes") o usa las preguntas rápidas. El parser entiende métrica, periodo, top N, jugador, estadio y región. Rankings por periodo, por estadio y **por región**, y **tarjetas 1080×1080 listas para redes sociales** (PNG descargable, una por región si lo pides).
+
+### Regiones
+
+Agrupa estadios en regiones de dos formas: edita la tabla en el expander "🗺️ Configurar regiones" dentro de Top Plays (y descarga el `regions.csv` generado), o coloca un `regions.csv` con columnas `Stadium,Region` en la carpeta del torneo — se carga automáticamente.
 
 ## Niveles de juego
 
