@@ -11,9 +11,13 @@ streamlit run trackman_app.py
 
 ## Fuentes de datos
 
+**☁️ Perfiles (recomendado para equipos)** — almacenamiento compartido en la nube (Supabase Storage). Cualquier usuario del app puede: entrar a un perfil y ver todo lo que otros subieron, subir sus propios CSVs a ese perfil, o crear un perfil nuevo (se crea al subir su primer archivo). Los archivos no se pueden borrar ni sobreescribir desde el app (los duplicados se renombran con timestamp). Al subir un archivo, el app se actualiza para todos. Funciona en Streamlit Cloud y local. Si un perfil incluye un `regions.csv`, se carga como mapa de regiones.
+
+Configuración: ya viene lista (URL y llave pública embebidas). Para usar otro proyecto Supabase, define `SUPABASE_URL` y `SUPABASE_KEY` en los secrets de Streamlit.
+
 **⬆️ Upload CSVs** — sube uno o varios CSVs de TrackMan. El app los une, limpia y deduplica nombres de jugadores automáticamente.
 
-**🏆 Tournament Folder** — apunta el app a una carpeta local. Cada subcarpeta es un torneo (ej. `Torneos/Copa Norte 2026/*.csv`). El app detecta cambios en los archivos (agregar, editar o corregir un nombre) y se actualiza automáticamente en la siguiente interacción — sin limpiar caché manualmente.
+**🏆 Carpeta local** — apunta el app a una carpeta de la computadora **donde corre el app**. Cada subcarpeta es un torneo. Nota: en Streamlit Cloud este modo no ve las carpetas de tu Mac — para compartir entre usuarios usa ☁️ Perfiles.
 
 ## Modos
 
@@ -42,6 +46,23 @@ El selector Pro / College / High School / Mixed ajusta todos los umbrales (Hard 
 ## Columnas soportadas
 
 `Pitcher, Batter, PitchCall, PlayResult, TaggedPitchType, RelSpeed, SpinRate, InducedVertBreak, HorzBreak, PlateLocSide, PlateLocHeight, ExitSpeed, Angle, Distance, Bearing, PitcherThrows, BatterSide, Stadium, Date, Balls, Strikes` — con alias comunes detectados automáticamente (ej. `KorBB → PlayResult`, `BallPark → Stadium`).
+
+## Módulo de trayectorias (`trajectory/`)
+
+Paquete independiente con motor físico de trayectorias release→plato, validación de rangos físicos, analítica (movement profile, release consistency, tendencias velo/spin) y API Flask documentada para integraciones externas. Ver `trajectory/README.md`. En el app: modo **🎯 Trayectorias 3D** con vista animada detrás del catcher (play/pausa + slider de frames), superposición de pitches, comparación de dos pitchers lado a lado, heatmaps por tipo y conteo, break chart, consistencia de release y tendencias por outing. Export: HTML interactivo y GIF vista-catcher. Tests: `pytest trajectory/tests/` (18 tests).
+
+## Changelog v4.4
+
+- 🎯 Modo **Trayectorias 3D** (Plotly) con animación, scrubbing, overlay múltiple y comparación de pitchers
+- Paquete `trajectory/`: motor físico (modos kinemático 9P e inferido), VAA/HAA, spin efficiency estimada, validación de rangos físicos con reporte, API Flask con 5 endpoints documentados, 18 tests
+- Schema: soporte paquete 9P (`x0..az0`), `VertBreak`, `PitchUID`, aliases `ReleaseHeight/ReleaseSide/pitcher_id/batter_id`
+- Nuevas dependencias: `plotly`, `pillow` (GIF); `flask` solo si usas la API
+
+## Changelog v4.3
+
+- ☁️ **Perfiles en la nube** (Supabase Storage): perfiles compartidos multi-usuario — todos ven lo subido en un perfil y pueden subir lo suyo; auto-refresh al subir; sin borrados ni sobreescrituras; `regions.csv` por perfil
+- Backend: bucket `perfiles` con RLS (lectura pública + subida solo-CSV)
+- Nueva dependencia: `supabase`
 
 ## Changelog v4.2
 

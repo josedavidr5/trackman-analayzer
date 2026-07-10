@@ -87,6 +87,16 @@ COL_ALIASES={
     "PitcherThrows":  ["PitcherHand","Throws"],
     "Stadium":        ["BallPark","Ballpark","Venue","Park","Field","Location"],
     "PlayResult":     ["KorBB","TaggedHitType","HitType","Result","PlayOutcome"],
+    # v4.4 aliases del módulo de trayectorias (schema del spec → nombres TrackMan)
+    "RelHeight":      ["ReleaseHeight","RelZ"],
+    "RelSide":        ["ReleaseSide","RelX"],
+    "RelSpeed":       ["ReleaseSpeed","PitchSpeed"],
+    "PitchUID":       ["PitchUid","PitchID","GUID"],
+    "PitcherId":      ["pitcher_id","PitcherID"],
+    "BatterId":       ["batter_id","BatterID"],
+    "x0":["X0"],"y0":["Y0"],"z0":["Z0"],
+    "vx0":["Vx0","VX0"],"vy0":["Vy0","VY0"],"vz0":["Vz0","VZ0"],
+    "ax0":["ax","Ax0","AX0"],"ay0":["ay","Ay0","AY0"],"az0":["az","Az0","AZ0"],
 }
 WARMUP={"warmup","undefined"}
 PITCH_MAP={
@@ -109,10 +119,12 @@ RESULT_MAP={
     "walk":"BB","intentionalwalk":"BB","bb":"BB","hitbypitch":"HBP","hbp":"HBP",
     "undefined":"—","nan":"—","":"—",
 }
-NUMERIC_COLS=["RelSpeed","SpinRate","InducedVertBreak","HorzBreak",
+NUMERIC_COLS=["RelSpeed","SpinRate","InducedVertBreak","HorzBreak","VertBreak",
               "PlateLocSide","PlateLocHeight","ExitSpeed","Angle","Distance",
               "Bearing","RelHeight","RelSide","Extension","SpinAxis",
-              "VertApprAngle","HorzApprAngle","Balls","Strikes","Inning"]
+              "VertApprAngle","HorzApprAngle","Balls","Strikes","Inning",
+              # v4.4 paquete kinemático 9P para el módulo de trayectorias
+              "x0","y0","z0","vx0","vy0","vz0","ax0","ay0","az0"]
 
 # ══════════════════════════════════════════════════════════════════════════════
 # PAGE CONFIG & STREAMLIT
@@ -464,6 +476,88 @@ def load_and_clean(_files_bytes, _file_names, _cache_key):
     df,pa=dedup_col(df,"Pitcher")
     df,ba=dedup_col(df,"Batter")
     return df,pa,ba
+
+# ══════════════════════════════════════════════════════════════════════════════
+# CLOUD PROFILES (Supabase Storage) — v4.3
+#   Shared profiles: any app user can open a profile, see everyone's uploads,
+#   and add their own CSVs. Works on Streamlit Cloud and locally.
+#   The publishable key below is safe to embed (client-side key, RLS enforced:
+#   read + CSV-upload only, no deletes/overwrites).
+# ══════════════════════════════════════════════════════════════════════════════
+SB_URL_DEFAULT="https://wnhqghlnmnoefdxgserl.supabase.co"
+SB_KEY_DEFAULT="sb_publishable_0xJjnG1x8Qyw7JCyA0mAEw_5SWfIVXI"
+SB_BUCKET="perfiles"
+
+def get_supabase():
+    try:
+        from supabase import create_client
+    except ImportError:
+        st.error("Falta el paquete **supabase**. Agrega `supabase` a requirements.txt "
+                 "(o `pip install supabase`).")
+        return None
+    try: url=st.secrets.get("SUPABASE_URL",SB_URL_DEFAULT)
+    except Exception: url=SB_URL_DEFAULT
+    try: key=st.secrets.get("SUPABASE_KEY",SB_KEY_DEFAULT)
+    except Exception: key=SB_KEY_DEFAULT
+    try:
+        return create_client(url,key)
+    except Exception as e:
+        st.error(f"No pude conectar a Supabase: {e}")
+        return None
+
+def sb_list(sb, path=""):
+    try:
+        return sb.storage.from_(SB_BUCKET).list(path,{"limit":1000}) or []
+    except Exception as e:
+        st.warning(f"Error listando '{path}': {e}"); return []
+
+def sb_list_profiles(sb):
+    return sorted(e["name"] for e in sb_list(sb,"")
+                  if e.get("id") is None and not e["name"].startswith("."))
+
+def sb_walk_csvs(sb, prefix, _depth=0):
+    """Recursively list CSVs under a profile: [(path, updated_at, size), …]."""
+    if _depth>4: return []
+    out=[]
+    for e in sb_list(sb,prefix):
+        name=e.get("name","")
+        full=f"{prefix}/{name}" if prefix else name
+        if e.get("id") is None:
+            out+=sb_walk_csvs(sb,full,_depth+1)
+        elif name.lower().endswith(".csv"):
+            meta=e.get("metadata") or {}
+            out.append((full,str(e.get("updated_at") or ""),int(meta.get("size") or 0)))
+    return out
+
+@st.cache_data(show_spinner=False)
+def sb_download_all(_sb, _paths, cache_sig):
+    """Download all CSVs of a profile; re-runs only when cache_sig changes
+    (any added/updated file changes the signature → instant refresh)."""
+    blobs=[]; names=[]
+    for p in _paths:
+        try:
+            blobs.append(_sb.storage.from_(SB_BUCKET).download(p))
+            names.append(p.split("/")[-1])
+        except Exception as e:
+            st.warning(f"No pude descargar {p}: {e}")
+    return blobs,names
+
+def sb_upload_files(sb, profile, files, existing_paths):
+    """Upload user CSVs into a profile. Never overwrites: auto-suffixes duplicates."""
+    ok=0
+    existing={p.split("/")[-1] for p in existing_paths}
+    for f in files:
+        fname=re.sub(r"[^A-Za-z0-9 ._()-]","",f.name).strip() or "archivo.csv"
+        if fname in existing:
+            stem,ext=fname.rsplit(".",1)
+            fname=f"{stem}_{pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')}.{ext}"
+        try:
+            sb.storage.from_(SB_BUCKET).upload(f"{profile}/{fname}",f.getvalue(),
+                                               {"content-type":"text/csv"})
+            ok+=1
+        except Exception as e:
+            st.sidebar.error(f"Error subiendo {fname}: {e}")
+    return ok
 
 # ══════════════════════════════════════════════════════════════════════════════
 # SIDEBAR FILTERS
@@ -1707,10 +1801,81 @@ def main():
 
     st.sidebar.markdown('<span class="sb-label">📂 Data</span>',unsafe_allow_html=True)
     import hashlib, os, glob
-    source=st.sidebar.radio("src",["⬆️ Upload CSVs","🏆 Tournament Folder"],
-                            horizontal=True,key="data_source",label_visibility="collapsed")
+    source=st.sidebar.radio("src",["☁️ Perfiles","⬆️ Upload CSVs","🏆 Carpeta local"],
+                            key="data_source",label_visibility="collapsed")
     tournament=""
-    if source=="⬆️ Upload CSVs":
+    if source=="☁️ Perfiles":
+        # ── v4.3 Cloud profiles: shared storage — everyone sees each profile's
+        #    uploads and can add their own. Auto-refreshes when files change.
+        sb=get_supabase()
+        if sb is None: return
+        profiles=sb_list_profiles(sb)
+        NEW="➕ Crear perfil nuevo…"
+        choice=st.sidebar.selectbox("👤 Perfil",[NEW]+profiles if profiles else [NEW],
+                                    index=1 if profiles else 0,key="sb_profile")
+        if choice==NEW:
+            raw=st.sidebar.text_input("Nombre del perfil nuevo",key="sb_newprof",
+                                      placeholder="Ej: Liga Norte 2026")
+            profile=re.sub(r"[^A-Za-z0-9 _-]","",raw).strip()
+            if not profile:
+                st.markdown("""
+                <div style="border:2px dashed #d0d0d0;border-radius:8px;padding:60px 36px;
+                  text-align:center;margin-top:24px">
+                  <div style="font-size:2.8rem;margin-bottom:10px">☁️</div>
+                  <div style="font-size:1.2rem;font-weight:700;margin-bottom:8px">
+                    Elige un perfil o crea uno nuevo</div>
+                  <div style="font-size:.88rem;opacity:.55;line-height:1.6">
+                    Todos los usuarios del app pueden ver los archivos de cada perfil<br>
+                    y subir los suyos. El perfil se crea al subir su primer CSV.
+                  </div>
+                </div>""",unsafe_allow_html=True)
+                return
+        else:
+            profile=choice
+        tournament=profile
+        # Upload panel — any user can add their own CSVs to the profile
+        st.sidebar.markdown('<span class="sb-label">⬆️ Subir a este perfil</span>',
+                            unsafe_allow_html=True)
+        up_files=st.sidebar.file_uploader("Subir CSVs al perfil",type=["csv"],
+                                          accept_multiple_files=True,key="sb_up",
+                                          label_visibility="collapsed")
+        csvs=sb_walk_csvs(sb,profile)
+        if up_files and st.sidebar.button(f"⬆️ Subir {len(up_files)} archivo(s)",key="sb_upbtn"):
+            done=sb_upload_files(sb,profile,up_files,[c[0] for c in csvs])
+            if done:
+                st.sidebar.success(f"✅ {done} archivo(s) subido(s) a **{profile}**")
+                st.cache_data.clear(); st.rerun()
+        if not csvs:
+            st.info(f"El perfil **{profile}** aún no tiene archivos. "
+                    "Sube el primer CSV desde la barra lateral para crearlo.")
+            return
+        # regions.csv inside the profile → region map; excluded from data
+        data_csvs=[c for c in csvs if c[0].split("/")[-1].lower()!="regions.csv"]
+        reg_entry=[c for c in csvs if c[0].split("/")[-1].lower()=="regions.csv"]
+        if reg_entry:
+            try:
+                rb,_=sb_download_all(sb,tuple(c[0] for c in reg_entry),str(reg_entry))
+                rm=pd.read_csv(io.BytesIO(rb[0]))
+                if {"Stadium","Region"}.issubset(rm.columns):
+                    st.session_state["region_csv_map"]=dict(zip(
+                        rm["Stadium"].astype(str).str.strip().str.title(),
+                        rm["Region"].astype(str).str.strip()))
+                    st.sidebar.caption(f"🗺️ regions.csv del perfil cargado ({len(rm)} estadios)")
+            except Exception: pass
+        if not data_csvs:
+            st.info(f"El perfil **{profile}** solo tiene regions.csv — sube CSVs de Trackman."); return
+        sig="|".join(f"{p}:{u}:{s}" for p,u,s in data_csvs)
+        cache_key=hashlib.md5(sig.encode()).hexdigest()
+        with st.spinner(f"Descargando {len(data_csvs)} archivo(s) del perfil…"):
+            file_bytes,file_names=sb_download_all(sb,tuple(c[0] for c in data_csvs),cache_key)
+        if not file_bytes:
+            st.error("No pude descargar los archivos del perfil."); return
+        n_files=len(file_names)
+        st.sidebar.caption(f"👤 **{profile}** · {n_files} CSV(s) · compartido — "
+                           "se actualiza al subir archivos")
+        if st.sidebar.button("🔄 Actualizar perfil",key="sb_refresh"):
+            st.cache_data.clear(); st.rerun()
+    elif source=="⬆️ Upload CSVs":
         uploaded=st.sidebar.file_uploader("Upload Trackman CSV",type=["csv"],
                                           accept_multiple_files=True)
         if not uploaded:
@@ -1867,14 +2032,24 @@ def main():
     if filtered.empty: st.warning("⚠️ No data after filters."); return
 
     st.sidebar.markdown('<span class="sb-label">🎯 Mode</span>',unsafe_allow_html=True)
-    mode=st.sidebar.radio("m",["⚾ Pitching","🏏 Hitting","📊 League","🔥 Top Plays"],
+    mode=st.sidebar.radio("m",["⚾ Pitching","🏏 Hitting","📊 League","🔥 Top Plays",
+                               "🎯 Trayectorias 3D"],
                           key="dash_mode",label_visibility="collapsed")
     st.sidebar.markdown("---")
-    st.sidebar.caption("v4.2 (Savant Edition) · Streamlit · Pandas · Matplotlib")
+    st.sidebar.caption("v4.4 (Savant Edition) · Streamlit · Pandas · Plotly")
 
     if mode=="⚾ Pitching": render_pitching(filtered,master,lmeta)
     elif mode=="🏏 Hitting": render_hitting(filtered,master,lmeta)
     elif mode=="🔥 Top Plays": render_top_plays(filtered,lmeta,tournament)
+    elif mode=="🎯 Trayectorias 3D":
+        try:
+            from trajectory.streamlit_view import render_trajectory_mode
+        except ImportError as e:
+            st.error(f"Módulo de trayectorias no disponible: {e}. "
+                     "Verifica que la carpeta trajectory/ esté en el repo y "
+                     "que requirements.txt incluya plotly.")
+        else:
+            render_trajectory_mode(filtered,lmeta)
     else: render_league(filtered,lmeta)
 
 if __name__=="__main__":
