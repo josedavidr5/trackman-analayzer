@@ -20,6 +20,16 @@ from .analytics import (ensure_pitch_ids, movement_profile,
 
 PALETTE = ["#1f77b4","#d62728","#2ca02c","#ff7f0e","#9467bd",
            "#8c564b","#e377c2","#7f7f7f","#17becf","#bcbd22"]
+# Colores oficiales Statcast/Savant por tipo de pitcheo (v4.5)
+STATCAST_COLORS={
+    "4-Seam":"#D22D49","Fastball":"#D22D49","Four-Seam Fastball":"#D22D49",
+    "2-Seam":"#DE6A04","Sinker":"#FE9D00","Cutter":"#933F2C","Slider":"#C3BD0E",
+    "Sweeper":"#DDB33A","Curve":"#00D1ED","Curveball":"#00D1ED",
+    "Change":"#1DBE3A","Changeup":"#1DBE3A","Split":"#3BACAC",
+    "Knuckleball":"#3C44CD","Screwball":"#60DB33",
+}
+def _pt_color(pt, idx=0):
+    return STATCAST_COLORS.get(str(pt), PALETTE[idx % len(PALETTE)])
 ZONE_X, ZONE_LO, ZONE_HI = 0.83, 1.5, 3.5
 
 
@@ -68,7 +78,7 @@ def build_3d_figure(rows, n_points=50, title=""):
         except ValueError:
             continue
         labels.append(_pitch_label(r))
-        colors.append(PALETTE[i % len(PALETTE)])
+        colors.append(_pt_color(r.get("TaggedPitchType"), i))
         metas.append(pitch_metrics(r))
     if not paths:
         return None, []
@@ -317,6 +327,7 @@ def render_trajectory_mode(df, lmeta):
             pp = pd.DataFrame(prof["pitches"])
             fig_b = px.scatter(pp, x="hb", y="vb", color="pitch_type",
                                hover_data=["velo"], opacity=0.55,
+                               color_discrete_map=STATCAST_COLORS,
                                color_discrete_sequence=PALETTE,
                                labels={"hb":"Horizontal Break (in)","vb":"Vertical Break (in)"})
             cc = pd.DataFrame(prof["centroids"])
@@ -361,7 +372,8 @@ def render_trajectory_mode(df, lmeta):
                                 ("avg_spin","Spin promedio (rpm)")):
                 if metric in td.columns:
                     fig_t = px.line(td, x="date", y=metric, color="pitch_type",
-                                    markers=True, color_discrete_sequence=PALETTE,
+                                    markers=True, color_discrete_map=STATCAST_COLORS,
+                                    color_discrete_sequence=PALETTE,
                                     labels={metric:lbl,"date":"Outing"})
                     fig_t.update_layout(height=340, title=lbl)
                     st.plotly_chart(fig_t, use_container_width=True)

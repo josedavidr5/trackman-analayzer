@@ -33,6 +33,15 @@ SLOWMO_SPIN = 8.0                              # divisor visual del spin (slow-m
 ZONE_X, ZONE_LO, ZONE_HI = 0.83, 1.5, 3.5
 
 PALETTE = ["#1f77b4","#d62728","#2ca02c","#ff7f0e","#9467bd","#8c564b"]
+STATCAST_COLORS={
+    "4-Seam":"#D22D49","Fastball":"#D22D49","Four-Seam Fastball":"#D22D49",
+    "2-Seam":"#DE6A04","Sinker":"#FE9D00","Cutter":"#933F2C","Slider":"#C3BD0E",
+    "Sweeper":"#DDB33A","Curve":"#00D1ED","Curveball":"#00D1ED",
+    "Change":"#1DBE3A","Changeup":"#1DBE3A","Split":"#3BACAC",
+    "Knuckleball":"#3C44CD","Screwball":"#60DB33",
+}
+def _pt_color(pt, idx=0):
+    return STATCAST_COLORS.get(str(pt), PALETTE[idx % len(PALETTE)])
 GRASS_A, GRASS_B = "#3e7c3a", "#468a41"
 DIRT = "#b98a5a"; DIRT_DARK = "#a97b4e"
 SKY_TOP, SKY_BOT = "#8ec9e8", "#dceef7"
@@ -271,7 +280,7 @@ def render_social_gif(rows: pd.DataFrame, pitcher: str = "", fps: int = 30,
         except ValueError:
             continue
         pitches.append({"row": r, "path": path, "metrics": pitch_metrics(r),
-                        "color": PALETTE[i % len(PALETTE)],
+                        "color": _pt_color(r.get("TaggedPitchType"), i),
                         "label": str(r.get("TaggedPitchType", "Pitch"))})
     if not pitches:
         return None

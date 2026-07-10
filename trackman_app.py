@@ -65,6 +65,21 @@ PITCH_PALETTE = [SAVANT_BLUE, SAVANT_RED, SAVANT_GREEN, SAVANT_ORANGE,
                  SAVANT_PURPLE, SAVANT_BROWN, SAVANT_PINK, SAVANT_GREY,
                  "#2ca02c", "#ff9896", "#98df8a", "#c5b0d5"]
 
+# v4.5 — Colores oficiales Statcast/Baseball Savant por tipo de pitcheo
+STATCAST_PITCH_COLORS={
+    "4-Seam":"#D22D49","Fastball":"#D22D49","2-Seam":"#DE6A04","Sinker":"#FE9D00",
+    "Cutter":"#933F2C","Slider":"#C3BD0E","Sweeper":"#DDB33A","Curve":"#00D1ED",
+    "Knuckle Curve":"#6236CD","Change":"#1DBE3A","Split":"#3BACAC",
+    "Knuckleball":"#3C44CD","Screwball":"#60DB33",
+}
+def pitch_color(pt, idx=0):
+    return STATCAST_PITCH_COLORS.get(str(pt), PITCH_PALETTE[idx % len(PITCH_PALETTE)])
+
+# Gradiente de percentiles Savant: azul (bajo) → gris (50) → rojo (alto)
+_PCT_CMAP=matplotlib.colors.LinearSegmentedColormap.from_list(
+    "savant_pct", ["#325AA1","#9E9E9E","#D82129"])
+def pct_color(p): return _PCT_CMAP(max(0.0, min(float(p), 100.0))/100.0)
+
 # Result → Savant colour mapping
 RESULT_COLORS = {
     "HR": SAVANT_RED,      # Home run = red
@@ -478,6 +493,133 @@ def load_and_clean(_files_bytes, _file_names, _cache_key):
     return df,pa,ba
 
 # ══════════════════════════════════════════════════════════════════════════════
+# PERCENTILE RANKINGS estilo Savant — v4.5
+#   Barras azul→gris→rojo con el percentil del jugador vs la liga cargada,
+#   más un tick de benchmark editable por el usuario.
+# ══════════════════════════════════════════════════════════════════════════════
+def _pctl_of(series, v, invert=False):
+    s=pd.Series(series).dropna().astype(float)
+    if len(s)<2 or v is None: return None
+    try: v=float(v)
+    except (TypeError,ValueError): return None
+    if np.isnan(v): return None
+    p=100.0*((s<v).sum()+0.5*(s==v).sum())/len(s)
+    return round(100.0-p if invert else p)
+
+def league_batter_table(df, lmeta, min_pitches=15):
+    """Una fila por bateador con las métricas clave (distribución de la liga)."""
+    rows={}
+    for b,g in df.groupby("Batter"):
+        if len(g)<min_pitches: continue
+        bip=batted_ball_mask(g)
+        ev=g.loc[bip,"ExitSpeed"].dropna() if "ExitSpeed" in g.columns else pd.Series(dtype=float)
+        disc=compute_plate_discipline_batter(g)
+        n_bip=max(int(bip.sum()),1)
+        rows[b]={
+            "Avg EV":round(ev.mean(),1) if len(ev) else np.nan,
+            "Max EV":round(ev.max(),1) if len(ev) else np.nan,
+            "Hard Hit %":safe_pct(int((ev>=lmeta.get("ev_hard",95)).sum()),max(len(ev),1)),
+            "Barrel %":safe_pct(int(barrel_mask(g[bip],lmeta.get("barrel_ev",98)).sum()),n_bip),
+            "K %":disc.get("K %",np.nan),"BB %":disc.get("BB %",np.nan),
+            "Chase %":disc.get("Chase %",np.nan),"Whiff %":disc.get("Whiff %",np.nan),
+            "wOBA":compute_woba(g)}
+    return pd.DataFrame(rows).T
+
+def league_pitcher_table(df, min_pitches=15):
+    rows={}
+    for p,g in df.groupby("Pitcher"):
+        if len(g)<min_pitches: continue
+        velo=g["RelSpeed"].dropna() if "RelSpeed" in g.columns else pd.Series(dtype=float)
+        spin=g["SpinRate"].dropna() if "SpinRate" in g.columns else pd.Series(dtype=float)
+        disc=compute_plate_discipline_batter(g)   # mismas fórmulas, lectura de pitcher
+        rows[p]={
+            "Avg Velo":round(velo.mean(),1) if len(velo) else np.nan,
+            "Max Velo":round(velo.max(),1) if len(velo) else np.nan,
+            "Avg Spin":round(spin.mean(),0) if len(spin) else np.nan,
+            "Zone %":disc.get("Zone %",np.nan),
+            "Whiff %":disc.get("Whiff %",np.nan),"Chase %":disc.get("Chase %",np.nan),
+            "K %":disc.get("K %",np.nan),"BB %":disc.get("BB %",np.nan)}
+    return pd.DataFrame(rows).T
+
+# métricas donde MENOS es MEJOR (se invierte el percentil, como hace Savant)
+HITTER_INVERT={"K %","Chase %","Whiff %"}
+PITCHER_INVERT={"BB %"}
+
+def savant_percentile_fig(rows, title, subtitle=""):
+    """rows: [(label, value_str, pct 0..100 | None, bench_pct | None)]"""
+    n=len(rows)
+    fig,ax=setup_savant_fig((8.4, 0.56*n+1.3))
+    ax.axis("off"); ax.grid(False)
+    x0,x1=3.55,9.55
+    for i,(lbl,val,pct,bp) in enumerate(rows):
+        y=n-1-i
+        ax.text(0.02,y,lbl,ha="left",va="center",fontsize=10.5,
+                fontweight="bold",color=SAVANT_TEXT)
+        ax.text(3.25,y,val,ha="right",va="center",fontsize=10,color="#777")
+        ax.plot([x0,x1],[y,y],color="#e6e6e6",lw=8,solid_capstyle="round",zorder=2)
+        if bp is not None:
+            xb=x0+(x1-x0)*bp/100.0
+            ax.plot([xb,xb],[y-0.30,y+0.30],color="#444",lw=1.6,zorder=3)
+            ax.plot([xb],[y+0.36],marker="v",ms=4,color="#444",zorder=3)
+        if pct is not None:
+            xp=x0+(x1-x0)*pct/100.0
+            ax.scatter([xp],[y],s=470,color=pct_color(pct),zorder=4,
+                       edgecolors="white",linewidths=1.6)
+            ax.text(xp,y,f"{pct:.0f}",ha="center",va="center",fontsize=10,
+                    fontweight="bold",color="white",zorder=5)
+        else:
+            ax.text((x0+x1)/2,y,"sin datos suficientes",ha="center",va="center",
+                    fontsize=8,color="#bbb",zorder=3)
+    ax.text(x0,n+0.05,"◀ Percentil 0",fontsize=7.5,color="#999")
+    ax.text(x1,n+0.05,"100 ▶",fontsize=7.5,color="#999",ha="right")
+    ax.set_xlim(-0.1,9.9); ax.set_ylim(-0.7,n+0.55)
+    savant_title(ax,title,subtitle)
+    return fig
+
+def benchmark_editor(defaults, key, note=""):
+    """Benchmarks editables por el usuario, persistentes en la sesión."""
+    saved=st.session_state.get(f"bmk_{key}",{})
+    base={k:saved.get(k,v) for k,v in defaults.items()}
+    with st.expander("⚙️ Benchmarks editables (marca ▼ en las barras)"):
+        st.caption(note or "Define el valor objetivo de cada métrica — por ejemplo, "
+                   "los estándares de reclutamiento college que ustedes manejen.")
+        ed=st.data_editor(pd.DataFrame({"Métrica":list(base.keys()),
+                                        "Benchmark":list(base.values())}),
+                          hide_index=True,use_container_width=True,
+                          key=f"bmked_{key}",disabled=["Métrica"])
+        out={}
+        for rec in ed.to_dict("records"):
+            try:
+                v=float(rec["Benchmark"])
+                if not np.isnan(v): out[rec["Métrica"]]=v
+            except (TypeError,ValueError): continue
+        st.session_state[f"bmk_{key}"]=out
+    return out
+
+def render_percentile_section(player, league_df, invert_set, defaults, key, min_players=5):
+    st.markdown('<div class="sh">📊 Percentile Rankings · estilo Savant</div>',
+                unsafe_allow_html=True)
+    if league_df.empty or player not in league_df.index or len(league_df)<min_players:
+        st.info(f"Se necesitan ≥{min_players} jugadores con muestra suficiente en el "
+                "dataset cargado para calcular percentiles de liga.")
+        return
+    bmk=benchmark_editor(defaults,key)
+    rows=[]
+    for m in league_df.columns:
+        col=league_df[m]; v=league_df.loc[player,m]
+        inv=m in invert_set
+        pct=_pctl_of(col,v,invert=inv)
+        bp=_pctl_of(col,bmk.get(m),invert=inv) if m in bmk else None
+        val="—" if (v is None or (isinstance(v,float) and np.isnan(v))) else (
+            f"{v:.3f}" if m=="wOBA" else f"{v:.1f}")
+        rows.append((m,val,pct,bp))
+    fig=savant_percentile_fig(rows,f"{player}",
+        f"percentil vs {len(league_df)} jugadores del dataset · ▼ = benchmark")
+    st.pyplot(fig,use_container_width=True); plt.close(fig)
+    st.caption("🔴 alto = mejor · 🔵 bajo = peor · en K%, Chase% y Whiff% el percentil "
+               "ya está invertido (percentil alto = menos strikeouts/chases).")
+
+# ══════════════════════════════════════════════════════════════════════════════
 # CLOUD PROFILES (Supabase Storage) — v4.3
 #   Shared profiles: any app user can open a profile, see everyone's uploads,
 #   and add their own CSVs. Works on Streamlit Cloud and locally.
@@ -804,7 +946,7 @@ def plot_pitch_locations(df, name):
     fig, ax = setup_savant_fig((5.5, 6))
     loc=df.dropna(subset=["PlateLocSide","PlateLocHeight"])
     for idx,(pt,g) in enumerate(loc.groupby("TaggedPitchType") if not loc.empty else []):
-        color=PITCH_PALETTE[idx%len(PITCH_PALETTE)]
+        color=pitch_color(pt,idx)
         ax.scatter(g["PlateLocSide"],g["PlateLocHeight"],label=pt,color=color,
                    alpha=0.75,s=38,edgecolors="white",linewidths=0.5,zorder=6)
     if loc.empty:
@@ -850,28 +992,57 @@ def plot_spray_chart(df, name):
     brad=np.deg2rad(spray["Bearing"])
     spray["Hit_X"]=spray["Distance"]*np.sin(brad)
     spray["Hit_Y"]=spray["Distance"]*np.cos(brad)
-    # Field
-    for sign in [1,-1]:
-        ax.plot([0,sign*420*np.sin(np.deg2rad(45))],[0,420*np.cos(np.deg2rad(45))],
-                color=SAVANT_GREY, lw=1.5, alpha=0.5)
-    ang=np.linspace(-45,45,300)
-    for r, ls in [(230,"--"),(330,"--"),(400,"-")]:
-        ax.plot(r*np.sin(np.deg2rad(ang)),r*np.cos(np.deg2rad(ang)),
-                color=SAVANT_GREY, lw=0.7, alpha=0.4, linestyle=ls)
+    # ── v4.5 Campo estilo Savant ─────────────────────────────────────────
+    ax.grid(False)
+    fence_t=np.linspace(-45,45,200)
+    fence_r=330+70*np.cos(np.deg2rad(fence_t*2))          # 330 líneas · 400 center
+    fx=fence_r*np.sin(np.deg2rad(fence_t)); fy=fence_r*np.cos(np.deg2rad(fence_t))
+    # pasto del outfield hasta la barda
+    ax.fill(np.concatenate([[0],fx,[0]]),np.concatenate([[0],fy,[0]]),
+            color="#cfe3c4",zorder=0)
+    # tierra del infield (arco) + diamante de pasto interior
+    inf_t=np.linspace(-45,45,100)
+    ax.fill(np.concatenate([[0],95*np.sin(np.deg2rad(inf_t)),[0]]),
+            np.concatenate([[0],95*np.cos(np.deg2rad(inf_t)),[0]]),
+            color="#d9b98a",zorder=1)
+    d=63.64                                                # bases a 90 ft
+    ax.fill([0,d-8,0,-(d-8),0],[8,d,2*d-14,d,8],color="#cfe3c4",zorder=2)
+    # montículo, líneas de base y bases
+    ax.add_patch(patches.Circle((0,60.5),9,color="#c9a878",zorder=3))
+    for sx,sy in [(d,d),(-d,d)]:
+        ax.plot([0,sx],[0,sy],color="#ffffff",lw=1.6,zorder=3)
+    ax.plot([d,0],[d,2*d],color="#ffffff",lw=1.6,zorder=3)
+    ax.plot([-d,0],[d,2*d],color="#ffffff",lw=1.6,zorder=3)
+    for bx,by in [(d,d),(0,2*d),(-d,d)]:
+        ax.add_patch(patches.Rectangle((bx-3.4,by-3.4),6.8,6.8,angle=45,
+                     color="#ffffff",zorder=4))
+    ax.add_patch(patches.Polygon([(-4,0),(4,0),(4,-4),(0,-8),(-4,-4)],
+                 closed=True,color="#ffffff",ec="#999",lw=0.8,zorder=4))
+    # líneas de foul hasta la barda + barda
+    for sgn in (1,-1):
+        ax.plot([0,sgn*330*np.sin(np.deg2rad(45))],[0,330*np.cos(np.deg2rad(45))],
+                color="#ffffff",lw=2.0,zorder=3)
+    ax.plot(fx,fy,color="#9db892",lw=3.0,zorder=3)
+    # arcos de distancia sutiles
+    for rr in (150,250,350):
+        ang=np.linspace(-45,45,120)
+        ax.plot(rr*np.sin(np.deg2rad(ang)),rr*np.cos(np.deg2rad(ang)),
+                color="#ffffff",lw=0.8,alpha=0.55,linestyle=(0,(4,4)),zorder=3)
+        ax.text(rr*np.sin(np.deg2rad(43)),rr*np.cos(np.deg2rad(43)),f"{rr}",
+                fontsize=7,color="#8aa07f",alpha=0.9,zorder=3)
     has_ev="ExitSpeed" in spray.columns and spray["ExitSpeed"].notna().any()
     sc=ax.scatter(spray["Hit_X"],spray["Hit_Y"],
                   c=spray["ExitSpeed"] if has_ev else SAVANT_BLUE,
                   cmap="coolwarm" if has_ev else None,
-                  s=45, alpha=0.80, edgecolors="white", linewidths=0.5,
-                  zorder=5, vmin=65, vmax=112, rasterized=True)
+                  s=48, alpha=0.85, edgecolors="white", linewidths=0.6,
+                  zorder=6, vmin=65, vmax=112, rasterized=True)
     if has_ev:
-        cb=fig.colorbar(sc,ax=ax,pad=0.02,shrink=0.7)
-        cb.set_label("Exit Speed (mph)", fontsize=8, color=SAVANT_TEXT)
-        cb.ax.tick_params(labelsize=8)
-    ax.set_xlim(-360,360); ax.set_ylim(-20,460)
-    ax.set_xlabel("Horizontal (ft)", fontsize=9); ax.set_ylabel("Vertical (ft)", fontsize=9)
+        cb=fig.colorbar(sc,ax=ax,pad=0.02,shrink=0.62)
+        cb.set_label("Exit Velocity (mph)", fontsize=8, color=SAVANT_TEXT)
+        cb.ax.tick_params(labelsize=8); cb.outline.set_visible(False)
+    ax.set_xlim(-340,340); ax.set_ylim(-25,430)
+    ax.axis("off")
     savant_title(ax,"Spray Chart",name)
-    style_savant_ax(ax)
     ax.set_aspect("equal",adjustable="box")
     return fig
 
@@ -986,7 +1157,7 @@ def plot_velocity_tendency(df, name):
     for idx,(pt,g) in enumerate(vel.groupby("TaggedPitchType")):
         daily=g.sort_values("Date").groupby("Date")["RelSpeed"].agg(["mean","std"]).reset_index()
         daily.columns=["Date","mean","std"]; daily["std"]=daily["std"].fillna(0)
-        color=PITCH_PALETTE[idx%len(PITCH_PALETTE)]
+        color=pitch_color(pt,idx)
         ax.fill_between(daily["Date"],daily["mean"]-daily["std"],daily["mean"]+daily["std"],
                         alpha=0.08,color=color,zorder=1)
         ax.plot(daily["Date"],daily["mean"],label=pt,color=color,lw=2.0,
@@ -1003,30 +1174,42 @@ def plot_velocity_tendency(df, name):
     fig.autofmt_xdate(rotation=28,ha="right"); return fig
 
 def plot_movement_profile(df, name):
-    fig, ax = setup_savant_fig((6.5, 5.8))
+    """v4.5 — Break plot estilo Baseball Savant: anillos concéntricos cada 6",
+    puntos por pitch en colores Statcast y promedio grande por tipo."""
+    fig, ax = setup_savant_fig((6.8, 6.4))
     needed={"HorzBreak","InducedVertBreak"}
     if not needed.issubset(df.columns):
         ax.text(.5,.5,"No movement data",ha="center",va="center",color=SAVANT_GREY,transform=ax.transAxes)
         fig.tight_layout(); return fig
     sub=df.dropna(subset=["HorzBreak","InducedVertBreak"])
+    ax.grid(False)
+    # anillos de referencia cada 6 pulgadas (sello visual de Savant)
+    for rr in (6,12,18,24):
+        ax.add_patch(patches.Circle((0,0),rr,fill=False,color="#e6e6e6",lw=1.1,zorder=1))
+        ax.text(0.4,rr-1.6,f'{rr}"',fontsize=7.5,color="#c4c4c4",zorder=1)
+    ax.axhline(0,color="#d2d2d2",lw=1.2,zorder=2)
+    ax.axvline(0,color="#d2d2d2",lw=1.2,zorder=2)
     for idx,(pt,g) in enumerate(sub.groupby("TaggedPitchType")):
         x,y,n=g["HorzBreak"].mean(),g["InducedVertBreak"].mean(),len(g)
-        color=PITCH_PALETTE[idx%len(PITCH_PALETTE)]
-        ax.scatter(g["HorzBreak"],g["InducedVertBreak"],color=color,alpha=0.08,s=8,edgecolors="none",zorder=3)
-        ax.scatter(x,y,s=max(n*3.5,70),color=color,alpha=0.88,
-                   edgecolors="white",linewidths=1.2,zorder=6)
-        ax.annotate(f"{pt}\n(n={n})",(x,y),xytext=(6,4),textcoords="offset points",
-                    fontsize=8,color=color,fontweight="bold")
-    ax.axhline(0,color=SAVANT_GREY,lw=0.8,alpha=0.6,zorder=2)
-    ax.axvline(0,color=SAVANT_GREY,lw=0.8,alpha=0.6,zorder=2)
-    ax.text(0.82,0.95,"Rise/Arm",transform=ax.transAxes,ha="center",fontsize=7.5,color=SAVANT_GREY,alpha=0.5)
-    ax.text(0.18,0.95,"Rise/Glove",transform=ax.transAxes,ha="center",fontsize=7.5,color=SAVANT_GREY,alpha=0.5)
-    ax.text(0.82,0.05,"Drop/Arm",transform=ax.transAxes,ha="center",fontsize=7.5,color=SAVANT_GREY,alpha=0.5)
-    ax.text(0.18,0.05,"Drop/Glove",transform=ax.transAxes,ha="center",fontsize=7.5,color=SAVANT_GREY,alpha=0.5)
-    ax.set_xlabel("Horizontal Break (in) — Arm side →", fontsize=9)
-    ax.set_ylabel("Induced Vert Break (in) — Rise →", fontsize=9)
-    savant_title(ax,"Movement Profile",name)
-    style_savant_ax(ax); return fig
+        color=pitch_color(pt,idx)
+        ax.scatter(g["HorzBreak"],g["InducedVertBreak"],color=color,alpha=0.45,
+                   s=24,edgecolors="white",linewidths=0.4,zorder=4)
+        ax.scatter(x,y,s=300,color=color,alpha=0.97,
+                   edgecolors="white",linewidths=2.0,zorder=6)
+        ax.annotate(f"{pt} ({n})",(x,y),
+                    xytext=(12, 10+(idx%3)*16),textcoords="offset points",
+                    fontsize=9,color="#222",fontweight="bold",zorder=7,
+                    bbox=dict(boxstyle="round,pad=0.22",facecolor="white",
+                              edgecolor=color,lw=1.2,alpha=0.92))
+    lim=27
+    ax.set_xlim(-lim,lim); ax.set_ylim(-lim,lim)
+    ax.set_aspect("equal",adjustable="box")
+    ax.set_xlabel("Horizontal Break (in) · lado del brazo →", fontsize=9)
+    ax.set_ylabel("Induced Vertical Break (in) · ride →", fontsize=9)
+    for sp in ax.spines.values(): sp.set_visible(False)
+    ax.tick_params(colors="#999", labelsize=8)
+    savant_title(ax,"Pitch Movement",f"{name} · vista del catcher")
+    return fig
 
 # ══════════════════════════════════════════════════════════════════════════════
 # NEW ANALYTICS v4.2 — usage by count, rolling EV, per-pitch heatmaps
@@ -1586,6 +1769,14 @@ def render_pitching(df, master_df, lmeta):
     with c4: st.metric("Pitches Types",str(pf["TaggedPitchType"].nunique()))
     with c5: st.metric("Distinct Dates",str(pf["Date"].dt.date.nunique()) if "Date" in pf.columns else "—")
     st.markdown("<br>",unsafe_allow_html=True)
+    # v4.5 — Percentile rankings estilo Savant vs la liga cargada
+    render_percentile_section(
+        selected, league_pitcher_table(df), PITCHER_INVERT,
+        defaults={"Avg Velo":float(lmeta.get("velo_avg",88)),
+                  "Max Velo":float(lmeta.get("velo_elite",93)),
+                  "Avg Spin":2200.0,"Zone %":48.0,"Whiff %":24.0,
+                  "Chase %":28.0,"K %":22.0,"BB %":8.5},
+        key="pit")
     tab1,tab2,tab3,tab4=st.tabs(["📋 Summary","📍 Location","📊 Trends","🏟️ Stadium"])
     with tab1:
         st.markdown('<div class="sh">Arsenal</div>',unsafe_allow_html=True)
@@ -1681,6 +1872,14 @@ def render_hitting(df, master_df, lmeta):
                 st.markdown(f'<div class="stat-badge"><div class="val">{v}%</div>'
                             f'<div class="lbl">{k}</div></div>',unsafe_allow_html=True)
         st.markdown("<br>",unsafe_allow_html=True)
+    # v4.5 — Percentile rankings estilo Savant vs la liga cargada
+    render_percentile_section(
+        selected, league_batter_table(df,lmeta), HITTER_INVERT,
+        defaults={"Avg EV":float(lmeta.get("ev_avg",88)),
+                  "Max EV":float(lmeta.get("ev_elite",105)),
+                  "Hard Hit %":35.0,"Barrel %":6.0,"K %":22.0,"BB %":8.5,
+                  "Chase %":28.0,"Whiff %":24.0,"wOBA":0.320},
+        key="hit")
     tab1,tab2,tab3,tab4,tab5,tab6=st.tabs([
         "📅 Monthly","🔄 Splits","📋 Results","🗺️ Spray","📊 Distributions","🏟️ Stadium"])
     with tab1:
@@ -2036,7 +2235,7 @@ def main():
                                "🎯 Trayectorias 3D"],
                           key="dash_mode",label_visibility="collapsed")
     st.sidebar.markdown("---")
-    st.sidebar.caption("v4.4 (Savant Edition) · Streamlit · Pandas · Plotly")
+    st.sidebar.caption("v4.5 (Savant Edition) · Streamlit · Pandas · Plotly")
 
     if mode=="⚾ Pitching": render_pitching(filtered,master,lmeta)
     elif mode=="🏏 Hitting": render_hitting(filtered,master,lmeta)
