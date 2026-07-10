@@ -308,7 +308,9 @@ def render_trajectory_mode(df, lmeta):
         else:
             fig_h = px.density_heatmap(loc, x="PlateLocSide", y="PlateLocHeight",
                 facet_col="TaggedPitchType", facet_col_wrap=3,
-                nbinsx=18, nbinsy=18, color_continuous_scale="RdYlBu_r",
+                nbinsx=16, nbinsy=16,
+                color_continuous_scale=[[0,"rgba(255,255,255,0)"],
+                                        [0.25,"#fbdcd9"],[0.6,"#ee8b7f"],[1,"#c22d20"]],
                 range_x=[-2.5,2.5], range_y=[0,5])
             for i in range(len(loc["TaggedPitchType"].unique())):
                 fig_h.add_shape(type="rect", x0=-ZONE_X, x1=ZONE_X, y0=ZONE_LO, y1=ZONE_HI,

@@ -59,12 +59,10 @@ def initial_conditions(row) -> dict:
     Lanza ValueError si no hay datos suficientes ni para el modo inferido.
     """
     if has_kinematics(row):
-        x0,y0,z0 = (_num(row,"x0"), _num(row,"y0"), _num(row,"z0"))
-        vx,vy,vz = (_num(row,"vx0"), _num(row,"vy0"), _num(row,"vz0"))
-        ax,ay,az = (_num(row,"ax0"), _num(row,"ay0"), _num(row,"az0"))
-        t_f = _solve_time_to_plate(y0, vy, ay)
-        return {"x0":x0,"y0":y0,"z0":z0,"vx0":vx,"vy0":vy,"vz0":vz,
-                "ax":ax,"ay":ay,"az":az,"t_flight":t_f,"source":"kinematic"}
+        kin = _try_kinematic(row)
+        if kin is not None:
+            return kin
+        # 9P presente pero con convención/unidades distintas → modo inferido
 
     # ── Modo inferido ────────────────────────────────────────────────────
     v_mph = _num(row, "RelSpeed", "ReleaseSpeed")
@@ -97,6 +95,34 @@ def initial_conditions(row) -> dict:
     az  = -G + 2.0*ivb/t_f**2                 # gravedad + Magnus vertical
     return {"x0":x0,"y0":y0,"z0":z0,"vx0":vx0,"vy0":vy0,"vz0":vz0,
             "ax":ax,"ay":ay,"az":az,"t_flight":t_f,"source":"inferred"}
+
+
+def _try_kinematic(row):
+    """
+    Integra el paquete 9P SOLO si es consistente: release y velocidad en
+    rangos físicos (pies/fps) y, cuando hay PlateLoc, el punto de cruce del
+    modelo debe coincidir con lo que reporta TrackMan (±0.75 ft). Si el CSV
+    usa otra convención de ejes o unidades métricas, devolvemos None y el
+    motor cae al modo inferido, que aterriza EXACTAMENTE en PlateLoc.
+    """
+    x0,y0,z0 = (_num(row,"x0"), _num(row,"y0"), _num(row,"z0"))
+    vx,vy,vz = (_num(row,"vx0"), _num(row,"vy0"), _num(row,"vz0"))
+    ax,ay,az = (_num(row,"ax0"), _num(row,"ay0"), _num(row,"az0"))
+    if not (40.0 < y0 < 62.0):        return None   # release en ft desde el plato
+    if not (-165.0 < vy < -70.0):     return None   # fps hacia el plato
+    if not (0.0 < z0 < 9.0):          return None
+    try:
+        t_f = _solve_time_to_plate(y0, vy, ay)
+    except ValueError:
+        return None
+    xf = x0 + vx*t_f + 0.5*ax*t_f*t_f
+    zf = z0 + vz*t_f + 0.5*az*t_f*t_f
+    px = _num(row, "PlateLocSide"); pz = _num(row, "PlateLocHeight")
+    if px is not None and pz is not None:
+        if abs(xf-px) > 0.75 or abs(zf-pz) > 0.75:
+            return None                              # no cruza donde TrackMan midió
+    return {"x0":x0,"y0":y0,"z0":z0,"vx0":vx,"vy0":vy,"vz0":vz,
+            "ax":ax,"ay":ay,"az":az,"t_flight":t_f,"source":"kinematic"}
 
 
 def _solve_time_to_plate(y0, vy0, ay):

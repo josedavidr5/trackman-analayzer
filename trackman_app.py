@@ -249,15 +249,59 @@ def savant_title(ax, title, subtitle=''):
         ax.text(0.0, 1.01, subtitle, transform=ax.transAxes, ha='left', va='bottom',
                 fontsize=8.5, color=SAVANT_GREY, style='italic')
 
-def draw_savant_zone(ax, alpha=0.4):
-    """Draw strike zone as minimal grey rectangle."""
+def draw_savant_zone(ax, alpha=0.8, shadow=True):
+    """Zona de strike estilo Savant: rectángulo oscuro fino + zona de sombra."""
     zone = patches.Rectangle((-0.71, 1.5), 1.42, 2.0,
-        lw=1.2, edgecolor=SAVANT_GREY, facecolor='none', alpha=alpha, zorder=3)
+        lw=1.8, edgecolor="#333333", facecolor='none', alpha=alpha, zorder=5)
     ax.add_patch(zone)
     for i in range(1, 3):
-        ax.axvline(-0.71+i*0.71, color=SAVANT_GREY, lw=0.4, alpha=alpha*0.4, zorder=2)
+        ax.plot([-0.71+i*0.4733]*2, [1.5, 3.5], color="#333333",
+                lw=0.6, alpha=alpha*0.35, zorder=4)
     for j in range(1, 3):
-        ax.axhline(1.5+j*2.0/3, color=SAVANT_GREY, lw=0.4, alpha=alpha*0.4, zorder=2)
+        ax.plot([-0.71, 0.71], [1.5+j*2.0/3]*2, color="#333333",
+                lw=0.6, alpha=alpha*0.35, zorder=4)
+    if shadow:  # zona de sombra (una pelota alrededor del borde)
+        ax.add_patch(patches.Rectangle((-0.95, 1.26), 1.9, 2.48,
+            lw=1.0, edgecolor="#aaaaaa", facecolor="none",
+            linestyle=(0,(4,3)), alpha=alpha*0.7, zorder=4))
+
+
+def _smooth_hist2d(x, y, xlim=(-2.0,2.0), zlim=(0.4,4.6), bins=46, sigma=2.6):
+    """Histograma 2D suavizado con kernel gaussiano (sin dependencias extra)."""
+    H,_,_=np.histogram2d(np.asarray(x),np.asarray(y),bins=bins,
+                         range=[list(xlim),list(zlim)])
+    k=np.exp(-0.5*(np.arange(-8,9)/sigma)**2); k/=k.sum()
+    H=np.apply_along_axis(lambda m: np.convolve(m,k,mode="same"),0,H)
+    H=np.apply_along_axis(lambda m: np.convolve(m,k,mode="same"),1,H)
+    return H/H.max() if H.max()>0 else H
+
+
+def zone_heatmap_ax(ax, x, y, base_color="#D22D49", thresh=0.07,
+                    xlim=(-2.0,2.0), zlim=(0.4,4.6), show_dots=True):
+    """
+    Heatmap de ubicación estilo Savant: blanco → color solo donde hay pitches
+    (nada de arcoíris que inunda el fondo), con puntos discretos encima.
+    """
+    br,bg,bb,_=matplotlib.colors.to_rgba(base_color)
+    cmap=matplotlib.colors.LinearSegmentedColormap.from_list("zh",
+        [(1,1,1,0.0),(br,bg,bb,0.28),(br,bg,bb,0.62),(br,bg,bb,0.92)])
+    H=_smooth_hist2d(x,y,xlim=xlim,zlim=zlim)
+    masked=np.ma.masked_less(H.T,thresh)
+    ax.imshow(masked,origin="lower",extent=[xlim[0],xlim[1],zlim[0],zlim[1]],
+              cmap=cmap,vmin=thresh,vmax=1.0,interpolation="bilinear",
+              aspect="auto",zorder=2)
+    if show_dots:
+        ax.scatter(x,y,s=13,color="#333333",alpha=0.45,
+                   edgecolors="white",linewidths=0.3,zorder=6)
+
+
+def style_zone_ax(ax, xlim=(-2.0,2.0), zlim=(0.4,4.6)):
+    """Ejes minimalistas para gráficas de zona: sin ticks, sin grid, con plato."""
+    ax.grid(False)
+    ax.set_xticks([]); ax.set_yticks([])
+    for sp in ax.spines.values(): sp.set_visible(False)
+    ax.set_xlim(*xlim); ax.set_ylim(*zlim)
+    ax.set_aspect("equal",adjustable="box")
 
 def draw_plate(ax):
     """Draw home plate."""
@@ -952,30 +996,24 @@ def plot_pitch_locations(df, name):
     if loc.empty:
         ax.text(.5,.5,"No location data",ha="center",va="center",color=SAVANT_GREY,transform=ax.transAxes)
     draw_savant_zone(ax); draw_plate(ax)
-    ax.set_xlim(-2.5,2.5); ax.set_ylim(0.3,5.0)
-    ax.set_xlabel("Plate Side (ft)", fontsize=9); ax.set_ylabel("Height (ft)", fontsize=9)
-    savant_title(ax,"Pitch Locations",name)
-    style_savant_ax(ax)
-    ax.legend(fontsize=7.5,framealpha=0.6,edgecolor="none",facecolor="none",labelcolor=SAVANT_TEXT)
-    ax.set_aspect("equal",adjustable="box")
+    style_zone_ax(ax)
+    savant_title(ax,"Pitch Locations",f"{name} · vista del catcher")
+    ax.legend(fontsize=8,framealpha=0.9,facecolor="white",edgecolor="#e5e5e5",
+              labelcolor=SAVANT_TEXT,loc="upper right",borderpad=0.6)
     return fig
 
 def plot_hot_zone(df, name):
-    fig, ax = setup_savant_fig((5.5, 6))
+    """v4.6 — Heatmap de frecuencia estilo Savant: blanco→rojo, sin arcoíris."""
+    fig, ax = setup_savant_fig((5.2, 5.8))
     loc=df.dropna(subset=["PlateLocSide","PlateLocHeight"])
     if len(loc)>=5:
-        try:
-            sns.kdeplot(data=loc,x="PlateLocSide",y="PlateLocHeight",fill=True,
-                        cmap="RdYlBu_r",alpha=0.65,levels=12,thresh=0.04,ax=ax)
-        except Exception: pass
+        zone_heatmap_ax(ax,loc["PlateLocSide"],loc["PlateLocHeight"])
     else:
-        ax.text(.5,.5,"Need ≥ 5 pitches",ha="center",va="center",color=SAVANT_GREY,transform=ax.transAxes)
+        ax.text(.5,.5,"Se requieren ≥ 5 pitches",ha="center",va="center",
+                color=SAVANT_GREY,transform=ax.transAxes)
     draw_savant_zone(ax); draw_plate(ax)
-    ax.set_xlim(-2.5,2.5); ax.set_ylim(0.3,5.0)
-    ax.set_xlabel("Plate Side (ft)", fontsize=9); ax.set_ylabel("Height (ft)", fontsize=9)
-    savant_title(ax,"Hot Zone (Density)",name)
-    style_savant_ax(ax)
-    ax.set_aspect("equal",adjustable="box")
+    style_zone_ax(ax)
+    savant_title(ax,"Ubicación — Frecuencia",f"{name} · {len(loc)} pitches · vista del catcher")
     return fig
 
 def plot_spray_chart(df, name):
@@ -992,44 +1030,35 @@ def plot_spray_chart(df, name):
     brad=np.deg2rad(spray["Bearing"])
     spray["Hit_X"]=spray["Distance"]*np.sin(brad)
     spray["Hit_Y"]=spray["Distance"]*np.cos(brad)
-    # ── v4.5 Campo estilo Savant ─────────────────────────────────────────
+    # ── v4.6 Campo minimalista estilo Savant: línea fina, fondo blanco ────
     ax.grid(False)
+    LINE="#c9c9c9"
     fence_t=np.linspace(-45,45,200)
     fence_r=330+70*np.cos(np.deg2rad(fence_t*2))          # 330 líneas · 400 center
     fx=fence_r*np.sin(np.deg2rad(fence_t)); fy=fence_r*np.cos(np.deg2rad(fence_t))
-    # pasto del outfield hasta la barda
+    # tinte de pasto casi imperceptible
     ax.fill(np.concatenate([[0],fx,[0]]),np.concatenate([[0],fy,[0]]),
-            color="#cfe3c4",zorder=0)
-    # tierra del infield (arco) + diamante de pasto interior
-    inf_t=np.linspace(-45,45,100)
-    ax.fill(np.concatenate([[0],95*np.sin(np.deg2rad(inf_t)),[0]]),
-            np.concatenate([[0],95*np.cos(np.deg2rad(inf_t)),[0]]),
-            color="#d9b98a",zorder=1)
-    d=63.64                                                # bases a 90 ft
-    ax.fill([0,d-8,0,-(d-8),0],[8,d,2*d-14,d,8],color="#cfe3c4",zorder=2)
-    # montículo, líneas de base y bases
-    ax.add_patch(patches.Circle((0,60.5),9,color="#c9a878",zorder=3))
-    for sx,sy in [(d,d),(-d,d)]:
-        ax.plot([0,sx],[0,sy],color="#ffffff",lw=1.6,zorder=3)
-    ax.plot([d,0],[d,2*d],color="#ffffff",lw=1.6,zorder=3)
-    ax.plot([-d,0],[d,2*d],color="#ffffff",lw=1.6,zorder=3)
-    for bx,by in [(d,d),(0,2*d),(-d,d)]:
-        ax.add_patch(patches.Rectangle((bx-3.4,by-3.4),6.8,6.8,angle=45,
-                     color="#ffffff",zorder=4))
-    ax.add_patch(patches.Polygon([(-4,0),(4,0),(4,-4),(0,-8),(-4,-4)],
-                 closed=True,color="#ffffff",ec="#999",lw=0.8,zorder=4))
-    # líneas de foul hasta la barda + barda
+            color="#f4f8f2",zorder=0)
+    # barda + líneas de foul (trazo fino gris)
+    ax.plot(fx,fy,color=LINE,lw=1.8,zorder=1,solid_capstyle="round")
     for sgn in (1,-1):
         ax.plot([0,sgn*330*np.sin(np.deg2rad(45))],[0,330*np.cos(np.deg2rad(45))],
-                color="#ffffff",lw=2.0,zorder=3)
-    ax.plot(fx,fy,color="#9db892",lw=3.0,zorder=3)
-    # arcos de distancia sutiles
-    for rr in (150,250,350):
-        ang=np.linspace(-45,45,120)
-        ax.plot(rr*np.sin(np.deg2rad(ang)),rr*np.cos(np.deg2rad(ang)),
-                color="#ffffff",lw=0.8,alpha=0.55,linestyle=(0,(4,4)),zorder=3)
-        ax.text(rr*np.sin(np.deg2rad(43)),rr*np.cos(np.deg2rad(43)),f"{rr}",
-                fontsize=7,color="#8aa07f",alpha=0.9,zorder=3)
+                color=LINE,lw=1.4,zorder=1)
+    # diamante del infield + arco de tierra (solo contorno)
+    d=63.64
+    ax.plot([0,d,0,-d,0],[0,d,2*d,d,0],color=LINE,lw=1.2,zorder=1)
+    inf_t=np.linspace(-45,45,80)
+    ax.plot(95*np.sin(np.deg2rad(inf_t)),95*np.cos(np.deg2rad(inf_t)),
+            color="#e2e2e2",lw=1.0,zorder=1)
+    for bx,by in [(d,d),(0,2*d),(-d,d)]:
+        ax.add_patch(patches.Rectangle((bx-3,by-3),6,6,angle=45,
+                     facecolor="white",edgecolor=LINE,lw=0.9,zorder=2))
+    ax.add_patch(patches.Circle((0,60.5),9,facecolor="white",
+                 edgecolor="#e2e2e2",lw=1.0,zorder=1))
+    ax.add_patch(patches.Polygon([(-3.5,0),(3.5,0),(3.5,-3.5),(0,-7),(-3.5,-3.5)],
+                 closed=True,facecolor="white",ec=LINE,lw=0.9,zorder=2))
+    # referencia única de distancia al CF
+    ax.text(0,404,"400 ft",fontsize=7.5,color="#b5b5b5",ha="center",zorder=1)
     has_ev="ExitSpeed" in spray.columns and spray["ExitSpeed"].notna().any()
     sc=ax.scatter(spray["Hit_X"],spray["Hit_Y"],
                   c=spray["ExitSpeed"] if has_ev else SAVANT_BLUE,
@@ -1081,27 +1110,20 @@ def plot_damage_zone(df, name):
     loc=df.dropna(subset=["PlateLocSide","PlateLocHeight"])
     if not loc.empty:
         has_ev="ExitSpeed" in loc.columns and loc["ExitSpeed"].notna().any()
-        try:
-            sns.kdeplot(data=loc,x="PlateLocSide",y="PlateLocHeight",fill=False,
-                        color=SAVANT_GREY,alpha=0.3,levels=5,thresh=0.1,ax=ax,zorder=3)
-        except Exception: pass
         sc=ax.scatter(loc["PlateLocSide"],loc["PlateLocHeight"],
                       c=loc["ExitSpeed"] if has_ev else SAVANT_ACCENT,
                       cmap="coolwarm" if has_ev else None,
-                      s=42,alpha=0.75,edgecolors="white",
-                      linewidths=0.5,zorder=6,vmin=65,vmax=112)
+                      s=52,alpha=0.85,edgecolors="white",
+                      linewidths=0.7,zorder=6,vmin=65,vmax=112)
         if has_ev:
-            cb=fig.colorbar(sc,ax=ax,pad=0.02,shrink=0.7)
-            cb.set_label("Exit Speed (mph)", fontsize=8, color=SAVANT_TEXT)
-            cb.ax.tick_params(labelsize=8)
+            cb=fig.colorbar(sc,ax=ax,pad=0.02,shrink=0.62)
+            cb.set_label("Exit Velocity (mph)", fontsize=8, color=SAVANT_TEXT)
+            cb.ax.tick_params(labelsize=8); cb.outline.set_visible(False)
     else:
         ax.text(.5,.5,"No location data",ha="center",va="center",color=SAVANT_GREY,transform=ax.transAxes)
     draw_savant_zone(ax); draw_plate(ax)
-    ax.set_xlim(-2.5,2.5); ax.set_ylim(0.3,5.0)
-    ax.set_xlabel("Plate Side (ft)", fontsize=9); ax.set_ylabel("Height (ft)", fontsize=9)
-    savant_title(ax,"Damage Zone",name)
-    style_savant_ax(ax)
-    ax.set_aspect("equal",adjustable="box")
+    style_zone_ax(ax)
+    savant_title(ax,"Damage Zone",f"{name} · dónde le pegan más duro")
     return fig
 
 def plot_ev_distribution(df, name):
@@ -1270,7 +1292,7 @@ def plot_rolling_ev(df, name, window=15):
     return fig
 
 def plot_location_by_pitch(df, name, max_types=6):
-    """Small-multiple location heatmaps, one per pitch type."""
+    """v4.6 — Small multiples estilo Savant: heatmap blanco→color del pitcheo."""
     loc=df.dropna(subset=["PlateLocSide","PlateLocHeight"])
     types=(loc["TaggedPitchType"].value_counts().head(max_types).index.tolist()
            if not loc.empty else [])
@@ -1281,27 +1303,25 @@ def plot_location_by_pitch(df, name, max_types=6):
                 color=SAVANT_GREY,transform=ax.transAxes)
         ax.axis("off"); return fig
     ncols=min(n,3); nrows=int(np.ceil(n/ncols))
-    fig, axes = plt.subplots(nrows,ncols,figsize=(3.6*ncols,4.2*nrows),layout="constrained")
+    fig, axes = plt.subplots(nrows,ncols,figsize=(3.3*ncols,3.9*nrows),layout="constrained")
     fig.patch.set_facecolor(SAVANT_BG)
     axes=np.atleast_1d(axes).ravel()
-    for ax,pt in zip(axes,types):
+    for idx,(ax,pt) in enumerate(zip(axes,types)):
         g=loc[loc["TaggedPitchType"]==pt]
         ax.set_facecolor(SAVANT_BG)
-        if len(g)>=5:
-            try:
-                sns.kdeplot(data=g,x="PlateLocSide",y="PlateLocHeight",fill=True,
-                            cmap="RdYlBu_r",alpha=0.65,levels=10,thresh=0.05,ax=ax)
-            except Exception: pass
-        ax.scatter(g["PlateLocSide"],g["PlateLocHeight"],s=8,color=SAVANT_TEXT,
-                   alpha=0.25,edgecolors="none",zorder=5)
+        color=pitch_color(pt,idx)
+        if len(g)>=4:
+            zone_heatmap_ax(ax,g["PlateLocSide"],g["PlateLocHeight"],base_color=color)
+        else:
+            ax.scatter(g["PlateLocSide"],g["PlateLocHeight"],s=30,color=color,
+                       alpha=0.8,edgecolors="white",linewidths=0.5,zorder=6)
         draw_savant_zone(ax); draw_plate(ax)
-        ax.set_xlim(-2.5,2.5); ax.set_ylim(0.3,5.0)
-        ax.set_title(f"{pt} (n={len(g)})",fontsize=9,fontweight="bold",color=SAVANT_TEXT)
-        ax.set_xlabel(""); ax.set_ylabel("")
-        style_savant_ax(ax)
-        ax.set_aspect("equal",adjustable="box")
+        style_zone_ax(ax)
+        ax.set_title(f"{pt}  ·  n={len(g)}",fontsize=10,fontweight="bold",
+                     color=color if color!="#C3BD0E" else "#8a860a")
     for ax in axes[n:]: ax.axis("off")
-    fig.suptitle(f"Location by Pitch Type — {name}",fontsize=11,fontweight="bold",color=SAVANT_TEXT)
+    fig.suptitle(f"Ubicación por tipo de pitcheo — {name}",
+                 fontsize=12,fontweight="bold",color=SAVANT_TEXT)
     return fig
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -2235,7 +2255,7 @@ def main():
                                "🎯 Trayectorias 3D"],
                           key="dash_mode",label_visibility="collapsed")
     st.sidebar.markdown("---")
-    st.sidebar.caption("v4.5 (Savant Edition) · Streamlit · Pandas · Plotly")
+    st.sidebar.caption("v4.6 (Savant Edition) · Streamlit · Pandas · Plotly")
 
     if mode=="⚾ Pitching": render_pitching(filtered,master,lmeta)
     elif mode=="🏏 Hitting": render_hitting(filtered,master,lmeta)
