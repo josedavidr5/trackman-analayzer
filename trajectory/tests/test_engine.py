@@ -119,3 +119,24 @@ def test_validate_schema():
     assert rep["missing_required"] == []
     assert rep["trajectory_ready"] is True
     assert rep["has_9p_kinematics"] is False
+
+
+def test_name_dedup_fuzzy():
+    """Regresión v4.7: variantes del mismo jugador se unifican; distintos no."""
+    import importlib.util, sys, os
+    spec=importlib.util.spec_from_file_location(
+        "tmapp", os.path.join(os.path.dirname(__file__),"..","..","trackman_app.py"))
+    tm=importlib.util.module_from_spec(spec); spec.loader.exec_module(tm)
+    sucios=["Jose Perez","José Pérez","Jose Peres","J. Perez","Perez, Jose",
+            "JOSE PEREZ ","Luis Perez","Deybi Jimenez","Deibi Jimenez",
+            "Ana Lopez","Anna Lopez","Abel Perez"]
+    norm=[tm.normalize_name(s) for s in sucios]
+    m=tm.find_clusters(norm)
+    # mismo jugador → mismo canónico
+    assert m["Jose Peres"]==m["Jose Perez"]=="Jose Perez"
+    assert m["J Perez"]=="Jose Perez"
+    assert m["Deibi Jimenez"]==m["Deybi Jimenez"]
+    assert m["Anna Lopez"]==m["Ana Lopez"]
+    # jugadores DISTINTOS no se mezclan
+    assert m["Luis Perez"]=="Luis Perez"
+    assert m["Abel Perez"]=="Abel Perez"

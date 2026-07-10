@@ -406,7 +406,36 @@ def normalize_name(raw):
         s=re.sub(r"[\-_/\\|]+"," ",s)
     return re.sub(r"\s+"," ",s).strip().title()
 
-def _tokens(n): return frozenset(t for t in n.lower().split() if len(t)>=2)
+def _tokens(n): return frozenset(t for t in n.lower().split() if len(t)>=1)
+
+from difflib import SequenceMatcher
+def _sim(a,b): return SequenceMatcher(None,a,b).ratio()
+
+def _token_match(tk, others):
+    """Un token empata si: inicial→prefijo; corto→exacto; largo→ratio ≥0.78."""
+    if len(tk)==1:
+        return any(o.startswith(tk) for o in others)
+    if len(tk)<=3:
+        return tk in others
+    return max((_sim(tk,o) for o in others),default=0.0)>=0.78
+
+def _names_similar(n1,n2,t1,t2):
+    """
+    v4.7 — matching difuso para variantes del mismo jugador:
+      · solapamiento de tokens (Jaccard ≥0.60): 'Jose Perez' ~ 'Perez Jose'
+      · similitud global ≥0.87: 'Jose Peres' ~ 'Jose Perez' (typos)
+      · todos los tokens del nombre corto empatan difuso en el largo:
+        'J Perez' ~ 'Jose Perez' (iniciales), 'Jose Peres' ~ 'Jose Perez Jr'
+    Los acentos ya vienen normalizados desde normalize_name().
+    """
+    big1={t for t in t1 if len(t)>=2}; big2={t for t in t2 if len(t)>=2}
+    if big1 and big2 and len(big1&big2)/len(big1|big2)>=0.60: return True
+    if _sim(n1.lower(),n2.lower())>=0.87: return True
+    if not t1 or not t2: return False
+    # simétrico: basta con que TODOS los tokens de un nombre empaten en el otro
+    # (la dirección corta→larga es la que captura 'J Perez' → 'Jose Perez')
+    return (all(_token_match(tk,t2) for tk in t1)
+            or all(_token_match(tk,t1) for tk in t2))
 
 def find_clusters(names):
     counts=Counter(names); unique=list(counts.keys()); n=len(unique)
@@ -420,25 +449,29 @@ def find_clusters(names):
     tsets=[_tokens(u) for u in unique]
     for i in range(n):
         for j in range(i+1,n):
-            ti,tj=tsets[i],tsets[j]
-            if ti and tj and len(ti&tj)/len(ti|tj)>=0.60: union(i,j)
+            if _names_similar(unique[i],unique[j],tsets[i],tsets[j]): union(i,j)
     clusters=defaultdict(list)
     for idx,name in enumerate(unique): clusters[find(idx)].append(name)
     mapping={}
     for members in clusters.values():
-        canonical=max(members,key=lambda nm:counts[nm])
+        # canónico: el más frecuente; empate → el más largo; empate → alfabético
+        canonical=max(members,key=lambda nm:(counts[nm],len(nm),nm))
         for m in members: mapping[m]=canonical
     return mapping
 
 def dedup_col(df,col):
-    if col not in df.columns: return df,0
+    """Normaliza + unifica variantes. Devuelve (df, n_alias, mapping).
+    Conserva el nombre normalizado original en {col}Orig para poder revisar
+    y corregir unificaciones manualmente sin recargar los archivos."""
+    if col not in df.columns: return df,0,{}
     df[col]=df[col].astype(str).apply(normalize_name)
+    df[f"{col}Orig"]=df[col]
     valid=df[col].dropna(); valid=valid[valid!="nan"]
-    if valid.empty: return df,0
+    if valid.empty: return df,0,{}
     mapping=find_clusters(valid.tolist())
     aliases=sum(1 for k,v in mapping.items() if k!=v)
     df[col]=df[col].map(mapping).fillna(df[col])
-    return df,aliases
+    return df,aliases,{k:v for k,v in mapping.items() if k!=v}
 
 # ══════════════════════════════════════════════════════════════════════════════
 # DATA LOADING
@@ -532,9 +565,9 @@ def load_and_clean(_files_bytes, _file_names, _cache_key):
     if "Stadium" in df.columns:
         df["Stadium"]=df["Stadium"].astype(str).str.strip().str.title()
         df["Stadium"]=df["Stadium"].replace({"Nan":"Unknown","":"Unknown"})
-    df,pa=dedup_col(df,"Pitcher")
-    df,ba=dedup_col(df,"Batter")
-    return df,pa,ba
+    df,pa,pmap=dedup_col(df,"Pitcher")
+    df,ba,bmap=dedup_col(df,"Batter")
+    return df,pa,ba,{"Pitcher":pmap,"Batter":bmap}
 
 # ══════════════════════════════════════════════════════════════════════════════
 # PERCENTILE RANKINGS estilo Savant — v4.5
@@ -2068,21 +2101,29 @@ def main():
             st.info(f"El perfil **{profile}** aún no tiene archivos. "
                     "Sube el primer CSV desde la barra lateral para crearlo.")
             return
-        # regions.csv inside the profile → region map; excluded from data
-        data_csvs=[c for c in csvs if c[0].split("/")[-1].lower()!="regions.csv"]
-        reg_entry=[c for c in csvs if c[0].split("/")[-1].lower()=="regions.csv"]
-        if reg_entry:
+        # regions.csv / names.csv dentro del perfil → mapas; excluidos de la data
+        AUX_FILES={"regions.csv","names.csv"}
+        data_csvs=[c for c in csvs if c[0].split("/")[-1].lower() not in AUX_FILES]
+        for fname,skey,cols,label in [
+                ("regions.csv","region_csv_map",("Stadium","Region"),"🗺️ regions.csv"),
+                ("names.csv","names_csv_map",("Variant","Canonical"),"🔗 names.csv")]:
+            entry=[c for c in csvs if c[0].split("/")[-1].lower()==fname]
+            if not entry: continue
             try:
-                rb,_=sb_download_all(sb,tuple(c[0] for c in reg_entry),str(reg_entry))
+                rb,_=sb_download_all(sb,tuple(c[0] for c in entry),str(entry))
                 rm=pd.read_csv(io.BytesIO(rb[0]))
-                if {"Stadium","Region"}.issubset(rm.columns):
-                    st.session_state["region_csv_map"]=dict(zip(
-                        rm["Stadium"].astype(str).str.strip().str.title(),
-                        rm["Region"].astype(str).str.strip()))
-                    st.sidebar.caption(f"🗺️ regions.csv del perfil cargado ({len(rm)} estadios)")
+                if set(cols).issubset(rm.columns):
+                    if skey=="region_csv_map":
+                        st.session_state[skey]=dict(zip(
+                            rm[cols[0]].astype(str).str.strip().str.title(),
+                            rm[cols[1]].astype(str).str.strip()))
+                    else:
+                        st.session_state[skey]={normalize_name(str(v)):normalize_name(str(c))
+                                                for v,c in zip(rm[cols[0]],rm[cols[1]])}
+                    st.sidebar.caption(f"{label} del perfil cargado ({len(rm)})")
             except Exception: pass
         if not data_csvs:
-            st.info(f"El perfil **{profile}** solo tiene regions.csv — sube CSVs de Trackman."); return
+            st.info(f"El perfil **{profile}** solo tiene archivos auxiliares — sube CSVs de Trackman."); return
         sig="|".join(f"{p}:{u}:{s}" for p,u,s in data_csvs)
         cache_key=hashlib.md5(sig.encode()).hexdigest()
         with st.spinner(f"Descargando {len(data_csvs)} archivo(s) del perfil…"):
@@ -2143,8 +2184,9 @@ def main():
         choice=st.sidebar.selectbox("🏆 Torneo",options,key="tm_tournament")
         folder=base if choice==options[0] else os.path.join(base,choice)
         tournament="" if choice==options[0] else choice
+        AUX_FILES={"regions.csv","names.csv"}
         paths=sorted(p for p in glob.glob(os.path.join(folder,"**","*.csv"),recursive=True)
-                     if os.path.basename(p).lower()!="regions.csv")
+                     if os.path.basename(p).lower() not in AUX_FILES)
         if not paths:
             st.warning(f"⚠️ No se encontraron CSVs en **{folder}**."); return
         # v4.2: optional regions.csv (Stadium,Region) in tournament or base folder
@@ -2159,6 +2201,19 @@ def main():
                         st.sidebar.caption(f"🗺️ regions.csv cargado ({len(rm)} estadios)")
                 except Exception as e:
                     st.sidebar.warning(f"regions.csv inválido: {e}")
+                break
+        # v4.7: optional names.csv (Variant,Canonical) — asignaciones fijas de nombres
+        for cand in (os.path.join(folder,"names.csv"),os.path.join(base,"names.csv")):
+            if os.path.isfile(cand):
+                try:
+                    nm=pd.read_csv(cand)
+                    if {"Variant","Canonical"}.issubset(nm.columns):
+                        st.session_state["names_csv_map"]={
+                            normalize_name(str(v)):normalize_name(str(c))
+                            for v,c in zip(nm["Variant"],nm["Canonical"])}
+                        st.sidebar.caption(f"🔗 names.csv cargado ({len(nm)} nombres)")
+                except Exception as e:
+                    st.sidebar.warning(f"names.csv inválido: {e}")
                 break
         sig="|".join(f"{p}:{os.path.getmtime(p)}:{os.path.getsize(p)}" for p in paths)
         cache_key=hashlib.md5(sig.encode()).hexdigest()
@@ -2228,7 +2283,7 @@ def main():
     )
 
     with st.spinner("Loading and parsing data…"):
-        master,pa,ba=load_and_clean(tuple(file_bytes),tuple(file_names),cache_key)
+        master,pa,ba,auto_merges=load_and_clean(tuple(file_bytes),tuple(file_names),cache_key)
 
     if master.empty:
         st.error("❌ No valid data could be read from the uploaded files."); return
@@ -2237,8 +2292,43 @@ def main():
     master.attrs["level_meta"]=lmeta
 
     st.sidebar.success(f"✅ **{len(master):,}** pitches · {n_files} file(s)")
-    if pa+ba>0:
-        st.sidebar.caption(f"🔗 Merged **{pa+ba}** name variants ({pa} P · {ba} B)")
+
+    # ── v4.7 Limpieza de nombres: revisión + correcciones + names.csv ─────
+    # names.csv (Variant,Canonical) cargado de carpeta/perfil manda sobre todo
+    names_csv=st.session_state.get("names_csv_map",{})
+    total_auto=pa+ba
+    if total_auto>0 or names_csv:
+        master=master.copy()
+        with st.sidebar.expander(f"🔗 Nombres unificados ({total_auto})",expanded=False):
+            st.caption("Variantes detectadas automáticamente (typos, acentos, "
+                       "iniciales, orden). **Edita 'Unificado a'** para corregir: "
+                       "escribe otro nombre para re-asignar, o repite la variante "
+                       "para separarla.")
+            rows=[{"Rol":rol,"Variante":k,"Unificado a":v}
+                  for rol,mp in auto_merges.items() for k,v in sorted(mp.items())]
+            edited_ov={}
+            if rows:
+                ed=st.data_editor(pd.DataFrame(rows),hide_index=True,
+                                  use_container_width=True,key="names_editor",
+                                  disabled=["Rol","Variante"])
+                for rec in ed.to_dict("records"):
+                    tgt=str(rec["Unificado a"]).strip()
+                    if tgt and tgt!=auto_merges.get(rec["Rol"],{}).get(rec["Variante"]):
+                        edited_ov.setdefault(rec["Rol"],{})[rec["Variante"]]=normalize_name(tgt)
+            if names_csv:
+                st.caption(f"📋 names.csv activo: {len(names_csv)} asignaciones fijas")
+            all_maps=pd.DataFrame([{"Variant":k,"Canonical":v}
+                                   for mp in auto_merges.values() for k,v in mp.items()])
+            if not all_maps.empty:
+                csv_dl(all_maps,"names.csv","⬇️ Guardar names.csv")
+        # aplicar: names.csv > correcciones manuales > automático
+        for col in ("Pitcher","Batter"):
+            if f"{col}Orig" not in master.columns: continue
+            auto=auto_merges.get(col,{}); ov=edited_ov.get(col,{}) if rows else {}
+            if names_csv or ov:
+                master[col]=master[f"{col}Orig"].map(
+                    lambda nm: names_csv.get(nm, ov.get(nm, auto.get(nm, nm))))
+        st.sidebar.caption(f"🔗 **{total_auto}** variantes unificadas ({pa} P · {ba} B)")
 
     # Clear cache button — lets analyst swap files without stale data
     if st.sidebar.button("🔄 Clear Cache & Reload", help="Force re-parse all uploaded files"):
@@ -2255,7 +2345,7 @@ def main():
                                "🎯 Trayectorias 3D"],
                           key="dash_mode",label_visibility="collapsed")
     st.sidebar.markdown("---")
-    st.sidebar.caption("v4.6 (Savant Edition) · Streamlit · Pandas · Plotly")
+    st.sidebar.caption("v4.7 (Savant Edition) · Streamlit · Pandas · Plotly")
 
     if mode=="⚾ Pitching": render_pitching(filtered,master,lmeta)
     elif mode=="🏏 Hitting": render_hitting(filtered,master,lmeta)

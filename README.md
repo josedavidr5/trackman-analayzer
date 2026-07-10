@@ -1,4 +1,8 @@
-# Trackman Analyzer — v4.2 (Savant Edition)
+# Trackman Analyzer — v4.7 (Savant Edition)
+
+## Limpieza de nombres (v4.7)
+
+El app unifica automáticamente variantes del mismo jugador entre archivos: typos de una letra ("Jose Peres" → "Jose Perez"), acentos ("José Pérez"), iniciales ("J. Perez"), orden ("Perez, Jose") y mayúsculas. Toda la data del jugador se agrega bajo un solo nombre canónico. En el sidebar, el expander **🔗 Nombres unificados** muestra cada unificación y permite corregirla a mano (editar "Unificado a"); las correcciones se aplican al instante sin recargar. Puedes exportar el mapa como `names.csv` (columnas `Variant,Canonical`) y colocarlo en la carpeta del torneo o subirlo al perfil de nube — se aplica como fuente autoritativa en cada carga. Jugadores distintos con apellido igual ("Luis Perez" vs "Jose Perez") **no** se mezclan; hay test de regresión que lo garantiza.
 
 Dashboard de análisis de datos TrackMan de béisbol construido con Streamlit, con diseño inspirado en Baseball Savant.
 
