@@ -55,6 +55,17 @@ El selector Pro / College / High School / Mixed ajusta todos los umbrales (Hard 
 
 Paquete independiente con motor físico de trayectorias release→plato, validación de rangos físicos, analítica (movement profile, release consistency, tendencias velo/spin) y API Flask documentada para integraciones externas. Ver `trajectory/README.md`. En el app: modo **🎯 Trayectorias 3D** con vista animada detrás del catcher (play/pausa + slider de frames), superposición de pitches, comparación de dos pitchers lado a lado, heatmaps por tipo y conteo, break chart, consistencia de release y tendencias por outing. Export: HTML interactivo y GIF vista-catcher. Tests: `pytest trajectory/tests/` (18 tests).
 
+## Changelog v4.9
+
+- 🧱 Refactor "híbrido por fases": analítica de Pitching extraída a paquetes limpios
+  `core/` (métricas puras) y `viz/` (figuras Plotly) — deja el terreno listo para un
+  frontend futuro sin reescribir lógica.
+- 🎯 Modo **Pitching interactivo**: los 6 gráficos migrados a Plotly (hover, zoom).
+- 🆕 **Panel de Arsenal "Stuff"** en Summary: plot de movimiento interactivo (burbuja por
+  tipo, tamaño = uso, hover con velo/spin/whiff/CSW) + tabla de arsenal con **CSW%**.
+- 🖨️ PDF de pitching unificado sobre Plotly (vía `kaleido`, con degradación elegante).
+- Nueva dependencia: `kaleido`.
+
 ## Changelog v4.4
 
 - 🎯 Modo **Trayectorias 3D** (Plotly) con animación, scrubbing, overlay múltiple y comparación de pitchers

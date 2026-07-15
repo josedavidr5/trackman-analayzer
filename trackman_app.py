@@ -895,35 +895,6 @@ def build_league_hitting_avg(df, lmeta=None):
 # ══════════════════════════════════════════════════════════════════════════════
 # SAVANT-STYLE CHARTS
 # ══════════════════════════════════════════════════════════════════════════════
-def plot_pitch_locations(df, name):
-    fig, ax = setup_savant_fig((5.5, 6))
-    loc=df.dropna(subset=["PlateLocSide","PlateLocHeight"])
-    for idx,(pt,g) in enumerate(loc.groupby("TaggedPitchType") if not loc.empty else []):
-        color=pitch_color(pt,idx)
-        ax.scatter(g["PlateLocSide"],g["PlateLocHeight"],label=pt,color=color,
-                   alpha=0.75,s=38,edgecolors="white",linewidths=0.5,zorder=6)
-    if loc.empty:
-        ax.text(.5,.5,"No location data",ha="center",va="center",color=SAVANT_GREY,transform=ax.transAxes)
-    draw_savant_zone(ax); draw_plate(ax)
-    style_zone_ax(ax)
-    savant_title(ax,"Pitch Locations",f"{name} · vista del catcher")
-    ax.legend(fontsize=8,framealpha=0.9,facecolor="white",edgecolor="#e5e5e5",
-              labelcolor=SAVANT_TEXT,loc="upper right",borderpad=0.6)
-    return fig
-
-def plot_hot_zone(df, name):
-    """v4.6 — Heatmap de frecuencia estilo Savant: blanco→rojo, sin arcoíris."""
-    fig, ax = setup_savant_fig((5.2, 5.8))
-    loc=df.dropna(subset=["PlateLocSide","PlateLocHeight"])
-    if len(loc)>=5:
-        zone_heatmap_ax(ax,loc["PlateLocSide"],loc["PlateLocHeight"])
-    else:
-        ax.text(.5,.5,"Se requieren ≥ 5 pitches",ha="center",va="center",
-                color=SAVANT_GREY,transform=ax.transAxes)
-    draw_savant_zone(ax); draw_plate(ax)
-    style_zone_ax(ax)
-    savant_title(ax,"Ubicación — Frecuencia",f"{name} · {len(loc)} pitches · vista del catcher")
-    return fig
 
 def plot_spray_chart(df, name):
     fig, ax = setup_savant_fig((6.5, 6.5))
@@ -1079,95 +1050,9 @@ def plot_la_distribution(df, name):
     ax.legend(fontsize=8,framealpha=0.6,edgecolor="none",facecolor="none",labelcolor=SAVANT_TEXT)
     return fig
 
-def plot_velocity_tendency(df, name):
-    fig, ax = setup_savant_fig((11, 3.8))
-    vel=df.dropna(subset=["RelSpeed","Date"]) if "RelSpeed" in df.columns else pd.DataFrame()
-    if vel.empty:
-        ax.text(.5,.5,"No velocity data",ha="center",va="center",color=SAVANT_GREY,transform=ax.transAxes)
-        fig.tight_layout(); return fig
-    for idx,(pt,g) in enumerate(vel.groupby("TaggedPitchType")):
-        daily=g.sort_values("Date").groupby("Date")["RelSpeed"].agg(["mean","std"]).reset_index()
-        daily.columns=["Date","mean","std"]; daily["std"]=daily["std"].fillna(0)
-        color=pitch_color(pt,idx)
-        ax.fill_between(daily["Date"],daily["mean"]-daily["std"],daily["mean"]+daily["std"],
-                        alpha=0.08,color=color,zorder=1)
-        ax.plot(daily["Date"],daily["mean"],label=pt,color=color,lw=2.0,
-                marker="o",ms=4.5,markeredgecolor="white",markeredgewidth=0.6,
-                alpha=0.90,zorder=5,solid_capstyle="round")
-        if not daily.empty:
-            last=daily.iloc[-1]
-            ax.annotate(f'{last["mean"]:.1f}',(last["Date"],last["mean"]),
-                        xytext=(4,4),textcoords="offset points",fontsize=8,color=color,fontweight="bold")
-    ax.set_xlabel("Date", fontsize=9); ax.set_ylabel("Avg Velocity (mph)", fontsize=9)
-    savant_title(ax,"Velocity Tendency",name)
-    style_savant_ax(ax)
-    ax.legend(fontsize=7.5,framealpha=0.6,edgecolor="none",facecolor="none",labelcolor=SAVANT_TEXT)
-    fig.autofmt_xdate(rotation=28,ha="right"); return fig
-
-def plot_movement_profile(df, name):
-    """v4.5 — Break plot estilo Baseball Savant: anillos concéntricos cada 6",
-    puntos por pitch en colores Statcast y promedio grande por tipo."""
-    fig, ax = setup_savant_fig((6.8, 6.4))
-    needed={"HorzBreak","InducedVertBreak"}
-    if not needed.issubset(df.columns):
-        ax.text(.5,.5,"No movement data",ha="center",va="center",color=SAVANT_GREY,transform=ax.transAxes)
-        fig.tight_layout(); return fig
-    sub=df.dropna(subset=["HorzBreak","InducedVertBreak"])
-    ax.grid(False)
-    # anillos de referencia cada 6 pulgadas (sello visual de Savant)
-    for rr in (6,12,18,24):
-        ax.add_patch(patches.Circle((0,0),rr,fill=False,color="#e6e6e6",lw=1.1,zorder=1))
-        ax.text(0.4,rr-1.6,f'{rr}"',fontsize=7.5,color="#c4c4c4",zorder=1)
-    ax.axhline(0,color="#d2d2d2",lw=1.2,zorder=2)
-    ax.axvline(0,color="#d2d2d2",lw=1.2,zorder=2)
-    for idx,(pt,g) in enumerate(sub.groupby("TaggedPitchType")):
-        x,y,n=g["HorzBreak"].mean(),g["InducedVertBreak"].mean(),len(g)
-        color=pitch_color(pt,idx)
-        ax.scatter(g["HorzBreak"],g["InducedVertBreak"],color=color,alpha=0.45,
-                   s=24,edgecolors="white",linewidths=0.4,zorder=4)
-        ax.scatter(x,y,s=300,color=color,alpha=0.97,
-                   edgecolors="white",linewidths=2.0,zorder=6)
-        ax.annotate(f"{pt} ({n})",(x,y),
-                    xytext=(12, 10+(idx%3)*16),textcoords="offset points",
-                    fontsize=9,color="#222",fontweight="bold",zorder=7,
-                    bbox=dict(boxstyle="round,pad=0.22",facecolor="white",
-                              edgecolor=color,lw=1.2,alpha=0.92))
-    lim=27
-    ax.set_xlim(-lim,lim); ax.set_ylim(-lim,lim)
-    ax.set_aspect("equal",adjustable="box")
-    ax.set_xlabel("Horizontal Break (in) · lado del brazo →", fontsize=9)
-    ax.set_ylabel("Induced Vertical Break (in) · ride →", fontsize=9)
-    for sp in ax.spines.values(): sp.set_visible(False)
-    ax.tick_params(colors="#999", labelsize=8)
-    savant_title(ax,"Pitch Movement",f"{name} · vista del catcher")
-    return fig
-
 # ══════════════════════════════════════════════════════════════════════════════
 # NEW ANALYTICS v4.2 — usage by count, rolling EV, per-pitch heatmaps
 # ══════════════════════════════════════════════════════════════════════════════
-def plot_usage_by_count(df, name):
-    tab=build_usage_by_count(df)
-    fig, ax = setup_savant_fig((11, 0.55*max(len(tab),4)+2))
-    if tab.empty:
-        ax.text(.5,.5,"Balls/Strikes columns required",ha="center",va="center",
-                color=SAVANT_GREY,transform=ax.transAxes)
-        ax.axis("off"); return fig
-    im=ax.imshow(tab.values,cmap="Blues",aspect="auto",vmin=0,vmax=max(tab.values.max(),1))
-    ax.set_xticks(range(len(tab.columns)),tab.columns,fontsize=8.5)
-    ax.set_yticks(range(len(tab.index)),tab.index,fontsize=8.5)
-    for i in range(tab.shape[0]):
-        for j in range(tab.shape[1]):
-            v=tab.values[i,j]
-            if v>0:
-                ax.text(j,i,f"{v:.0f}",ha="center",va="center",fontsize=7.5,
-                        color="#ffffff" if v>tab.values.max()*0.6 else SAVANT_TEXT)
-    ax.set_xlabel("Count (Balls-Strikes)",fontsize=9)
-    savant_title(ax,"Pitch Usage % by Count",name)
-    ax.grid(False)
-    for s in ax.spines.values(): s.set_visible(False)
-    cb=fig.colorbar(im,ax=ax,pad=0.02,shrink=0.8); cb.set_label("Usage %",fontsize=8)
-    return fig
-
 def plot_rolling_ev(df, name, window=15):
     """Rolling exit-velocity trend over batted balls, chronological."""
     fig, ax = setup_savant_fig((11, 3.8))
@@ -1188,39 +1073,6 @@ def plot_rolling_ev(df, name, window=15):
     savant_title(ax,"Rolling Exit Velocity",name)
     style_savant_ax(ax)
     ax.legend(fontsize=8,framealpha=0.6,edgecolor="none",facecolor="none",labelcolor=SAVANT_TEXT)
-    return fig
-
-def plot_location_by_pitch(df, name, max_types=6):
-    """v4.6 — Small multiples estilo Savant: heatmap blanco→color del pitcheo."""
-    loc=df.dropna(subset=["PlateLocSide","PlateLocHeight"])
-    types=(loc["TaggedPitchType"].value_counts().head(max_types).index.tolist()
-           if not loc.empty else [])
-    n=len(types)
-    if n==0:
-        fig, ax = setup_savant_fig((6,4))
-        ax.text(.5,.5,"No location data",ha="center",va="center",
-                color=SAVANT_GREY,transform=ax.transAxes)
-        ax.axis("off"); return fig
-    ncols=min(n,3); nrows=int(np.ceil(n/ncols))
-    fig, axes = plt.subplots(nrows,ncols,figsize=(3.3*ncols,3.9*nrows),layout="constrained")
-    fig.patch.set_facecolor(SAVANT_BG)
-    axes=np.atleast_1d(axes).ravel()
-    for idx,(ax,pt) in enumerate(zip(axes,types)):
-        g=loc[loc["TaggedPitchType"]==pt]
-        ax.set_facecolor(SAVANT_BG)
-        color=pitch_color(pt,idx)
-        if len(g)>=4:
-            zone_heatmap_ax(ax,g["PlateLocSide"],g["PlateLocHeight"],base_color=color)
-        else:
-            ax.scatter(g["PlateLocSide"],g["PlateLocHeight"],s=30,color=color,
-                       alpha=0.8,edgecolors="white",linewidths=0.5,zorder=6)
-        draw_savant_zone(ax); draw_plate(ax)
-        style_zone_ax(ax)
-        ax.set_title(f"{pt}  ·  n={len(g)}",fontsize=10,fontweight="bold",
-                     color=color if color!="#C3BD0E" else "#8a860a")
-    for ax in axes[n:]: ax.axis("off")
-    fig.suptitle(f"Ubicación por tipo de pitcheo — {name}",
-                 fontsize=12,fontweight="bold",color=SAVANT_TEXT)
     return fig
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1712,6 +1564,9 @@ def render_pitching(df, master_df, lmeta):
         key="pit")
 
     # Figuras Plotly (una sola fuente; también alimentan el PDF)
+    # El checkbox "arsenal_show_ind" se define abajo en el tab Summary por layout,
+    # pero su valor se necesita aquí antes; Streamlit ya aplicó el valor nuevo del
+    # widget a session_state antes de este rerun, así que el .get() lee el valor actual.
     fig_mov = vpitch.movement_bubble(movement_points(pf), selected,
                                      show_individual=st.session_state.get("arsenal_show_ind", True))
     fig_loc = vpitch.location_scatter(pf, selected)
