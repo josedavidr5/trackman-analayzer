@@ -108,3 +108,11 @@ def test_usage_heatmap_ok_and_empty():
     fig_empty = vp.usage_heatmap(pd.DataFrame(), "P")
     assert isinstance(fig_empty, go.Figure)
     assert fig_empty.layout.annotations
+
+
+def test_velo_trend_missing_pitchtype_degrades():
+    # RelSpeed/Date present but no TaggedPitchType → must degrade, not raise
+    df = pd.DataFrame({"RelSpeed": [84, 85, 94],
+                       "Date": pd.to_datetime(["2026-06-01", "2026-06-02", "2026-06-01"])})
+    f = vp.velo_trend(df, "P")
+    assert f.layout.annotations

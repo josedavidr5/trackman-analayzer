@@ -137,7 +137,7 @@ def location_by_pitch(df, name, max_types=6):
 
 
 def velo_trend(df, name):
-    if "RelSpeed" not in df.columns or "Date" not in df.columns:
+    if not {"RelSpeed", "Date", "TaggedPitchType"}.issubset(df.columns):
         return theme.empty_fig("No velocity data")
     vel = df.dropna(subset=["RelSpeed", "Date"])
     if vel.empty:
