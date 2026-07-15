@@ -70,3 +70,11 @@ def test_location_by_pitch_ok_and_empty():
     fig_empty = vp.location_by_pitch(pd.DataFrame(), "P")
     assert isinstance(fig_empty, go.Figure)
     assert fig_empty.layout.annotations
+
+
+def test_location_builders_missing_pitchtype_degrade():
+    # PlateLoc present but no TaggedPitchType column → must degrade, not raise
+    df = pd.DataFrame({"PlateLocSide": [0.1, -0.2], "PlateLocHeight": [2.5, 2.4]})
+    f1 = vp.location_scatter(df, "P")
+    f2 = vp.location_by_pitch(df, "P")
+    assert f1.layout.annotations and f2.layout.annotations

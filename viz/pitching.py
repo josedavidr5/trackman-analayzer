@@ -56,12 +56,14 @@ def movement_bubble(points, name, show_individual=True):
 
 
 def location_scatter(df, name):
-    if not {"PlateLocSide", "PlateLocHeight"}.issubset(df.columns):
+    if not {"PlateLocSide", "PlateLocHeight", "TaggedPitchType"}.issubset(df.columns):
         return theme.empty_fig("No location data")
     loc = df.dropna(subset=["PlateLocSide", "PlateLocHeight"])
     if loc.empty:
         return theme.empty_fig("No location data")
     types = list(loc["TaggedPitchType"].dropna().unique())
+    if not types:
+        return theme.empty_fig("No location data")
     cmap = theme.color_map(types)
     fig = go.Figure()
     for pt, g in loc.groupby("TaggedPitchType"):
@@ -104,7 +106,7 @@ def hot_zone(df, name):
 
 
 def location_by_pitch(df, name, max_types=6):
-    if not {"PlateLocSide", "PlateLocHeight"}.issubset(df.columns):
+    if not {"PlateLocSide", "PlateLocHeight", "TaggedPitchType"}.issubset(df.columns):
         return theme.empty_fig("No location data")
     loc = df.dropna(subset=["PlateLocSide", "PlateLocHeight"])
     types = (loc["TaggedPitchType"].value_counts().head(max_types).index.tolist()
