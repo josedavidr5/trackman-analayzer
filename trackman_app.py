@@ -48,6 +48,9 @@ from core.metrics import (
     ZONE_HALF_WIDTH, ZONE_BOTTOM, ZONE_TOP, WOBA_W,
     count_pa, in_zone_mask, batted_ball_mask, barrel_mask, count_k_bb, compute_woba,
 )
+from core.pitching import (build_usage_by_count, arsenal_stuff, movement_points)
+from core.pitching import pitch_summary as build_pitch_summary
+from core.pitching import pitch_discipline as compute_pitch_discipline
 
 warnings.filterwarnings("ignore")
 matplotlib.use("Agg")
@@ -765,55 +768,6 @@ def player_search_select(all_players, label, key):
 # ══════════════════════════════════════════════════════════════════════════════
 # ANALYTICS BUILDERS
 # ══════════════════════════════════════════════════════════════════════════════
-def build_pitch_summary(df):
-    total=len(df); rows=[]
-    for pt,grp in df.groupby("TaggedPitchType"):
-        r={"Pitch":pt,"Count":len(grp),"Usage %":safe_pct(len(grp),total)}
-        if "RelSpeed" in grp.columns:
-            r["Avg mph"]=round(grp["RelSpeed"].mean(),1)
-            r["Max mph"]=round(grp["RelSpeed"].max(),1)
-        for col,alias in [("SpinRate","Spin"),("InducedVertBreak","IVB"),("HorzBreak","HB")]:
-            r[alias]=round(grp[col].mean(),1) if col in grp.columns else np.nan
-        rows.append(r)
-    out=pd.DataFrame(rows)
-    if out.empty: return out
-    out["_fb"]=out["Pitch"].str.lower().str.contains("fastball|4-seam|2-seam").astype(int)
-    return out.sort_values(["_fb","Count"],ascending=[False,False]).drop(columns="_fb").reset_index(drop=True)
-
-def compute_pitch_discipline(df):
-    """
-    Per-pitch-type discipline (v4.2):
-      Zone %  = pitches inside the true zone (PlateLoc) / located pitches
-      Chase % = swings at pitches OUT of zone / out-of-zone pitches
-    Falls back to PitchCall approximation when location data is missing.
-    """
-    if "PitchCall" not in df.columns: return pd.DataFrame()
-    ZONE_CALLS={"StrikeCalled","StrikeSwinging","FoulBall","FoulBallFieldable","FoulBallNotFieldable","InPlay"}
-    rows=[]
-    for pt,grp in df.groupby("TaggedPitchType"):
-        pc=grp["PitchCall"].astype(str)
-        n=len(grp)
-        sw_m=pc.isin(SWING_CALLS); ct_m=pc.isin(CONTACT_CALLS); wh_m=pc.eq("StrikeSwinging")
-        sw,ct,wh=int(sw_m.sum()),int(ct_m.sum()),int(wh_m.sum())
-        zone_m,has_loc=in_zone_mask(grp)
-        if has_loc:
-            located=grp["PlateLocSide"].notna()&grp["PlateLocHeight"].notna()
-            n_loc=int(located.sum())
-            in_z=int(zone_m.sum())
-            oz=located&~zone_m
-            zone_pct=safe_pct(in_z,n_loc)
-            chase_pct=safe_pct(int((sw_m&oz).sum()),max(int(oz.sum()),1))
-        else:
-            in_z=int(pc.isin(ZONE_CALLS).sum())
-            zone_pct=safe_pct(in_z,n)
-            chase_pct=safe_pct(max(0,sw-ct),max(n-in_z,1))
-        rows.append({"Pitch":pt,"Count":n,
-                     "Zone %":zone_pct,"Swing %":safe_pct(sw,n),
-                     "Contact %":safe_pct(ct,max(sw,1)),
-                     "Chase %":chase_pct,
-                     "Whiff %":safe_pct(wh,max(sw,1))})
-    return pd.DataFrame(rows).sort_values("Count",ascending=False).reset_index(drop=True)
-
 def build_play_result_table(df):
     if "PlayResult" not in df.columns: return pd.DataFrame()
     counts=df["PlayResult"].value_counts().reset_index()
@@ -1190,16 +1144,6 @@ def plot_movement_profile(df, name):
 # ══════════════════════════════════════════════════════════════════════════════
 # NEW ANALYTICS v4.2 — usage by count, rolling EV, per-pitch heatmaps
 # ══════════════════════════════════════════════════════════════════════════════
-def build_usage_by_count(df):
-    """Pitch usage % by ball-strike count (rows=pitch, cols=count)."""
-    if "Count" not in df.columns or df["Count"].isna().all(): return pd.DataFrame()
-    sub=df[df["Count"].notna()&~df["Count"].str.contains("<NA>",na=True)]
-    if sub.empty: return pd.DataFrame()
-    order=[f"{b}-{s}" for b in range(4) for s in range(3)]
-    tab=pd.crosstab(sub["TaggedPitchType"],sub["Count"],normalize="columns")*100
-    cols=[c for c in order if c in tab.columns]
-    return tab[cols].round(1) if cols else pd.DataFrame()
-
 def plot_usage_by_count(df, name):
     tab=build_usage_by_count(df)
     fig, ax = setup_savant_fig((11, 0.55*max(len(tab),4)+2))
