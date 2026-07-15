@@ -2345,7 +2345,7 @@ def main():
                                "🎯 Trayectorias 3D"],
                           key="dash_mode",label_visibility="collapsed")
     st.sidebar.markdown("---")
-    st.sidebar.caption("v4.7 (Savant Edition) · Streamlit · Pandas · Plotly")
+    st.sidebar.caption("v4.8 (Savant Edition) · Streamlit · Pandas · Plotly")
 
     if mode=="⚾ Pitching": render_pitching(filtered,master,lmeta)
     elif mode=="🏏 Hitting": render_hitting(filtered,master,lmeta)

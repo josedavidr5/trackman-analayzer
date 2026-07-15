@@ -33,29 +33,57 @@ def _pt_color(pt, idx=0):
 ZONE_X, ZONE_LO, ZONE_HI = 0.83, 1.5, 3.5
 
 
+SCENE_BG="#0b1523"          # azul noche broadcast
+
 def _zone_traces():
-    """Zona de strike (grid 3×3) + plato en 3D, en y = frente del plato."""
+    """v4.8 — Zona translúcida estilo Statcast 3D: panel blanco con grid,
+    plato y guías de terreno sobre escena oscura."""
     traces = []
     y = PLATE_Y
-    # marco
+    # panel translúcido de la zona
+    traces.append(go.Mesh3d(
+        x=[-ZONE_X,ZONE_X,ZONE_X,-ZONE_X], y=[y]*4,
+        z=[ZONE_LO,ZONE_LO,ZONE_HI,ZONE_HI],
+        i=[0,0], j=[1,2], k=[2,3], color="#ffffff", opacity=0.10,
+        hoverinfo="skip", showscale=False))
+    # marco brillante
     traces.append(go.Scatter3d(
         x=[-ZONE_X,ZONE_X,ZONE_X,-ZONE_X,-ZONE_X], y=[y]*5,
         z=[ZONE_LO,ZONE_LO,ZONE_HI,ZONE_HI,ZONE_LO],
-        mode="lines", line=dict(color="#555", width=5),
-        name="Zona de strike", showlegend=False, hoverinfo="skip"))
-    # grid interno
+        mode="lines", line=dict(color="#ffffff", width=7),
+        opacity=0.95, showlegend=False, hoverinfo="skip"))
+    # grid interno sutil
     for f in (1/3, 2/3):
         gx = -ZONE_X + 2*ZONE_X*f
         gz = ZONE_LO + (ZONE_HI-ZONE_LO)*f
         traces.append(go.Scatter3d(x=[gx,gx], y=[y,y], z=[ZONE_LO,ZONE_HI],
-            mode="lines", line=dict(color="#999", width=2), showlegend=False, hoverinfo="skip"))
+            mode="lines", line=dict(color="#ffffff", width=2), opacity=0.30,
+            showlegend=False, hoverinfo="skip"))
         traces.append(go.Scatter3d(x=[-ZONE_X,ZONE_X], y=[y,y], z=[gz,gz],
-            mode="lines", line=dict(color="#999", width=2), showlegend=False, hoverinfo="skip"))
-    # plato
+            mode="lines", line=dict(color="#ffffff", width=2), opacity=0.30,
+            showlegend=False, hoverinfo="skip"))
+    # piso sutil (plano oscuro) + plato + guías de líneas de foul
+    traces.append(go.Mesh3d(
+        x=[-4.5,4.5,4.5,-4.5], y=[-1.0,-1.0,58.0,58.0], z=[0,0,0,0],
+        i=[0,0], j=[1,2], k=[2,3], color="#152438", opacity=0.85,
+        hoverinfo="skip", showscale=False))
     traces.append(go.Scatter3d(
-        x=[-0.71,0.71,0.71,0,-0.71,-0.71], y=[y,y,0.2,0,0.2,y], z=[0.02]*6,
-        mode="lines", line=dict(color="#888", width=4), showlegend=False, hoverinfo="skip"))
+        x=[-0.71,0.71,0.71,0,-0.71,-0.71], y=[y,y,0.4,0.1,0.4,y], z=[0.012]*6,
+        mode="lines", line=dict(color="#e8eef4", width=5),
+        opacity=0.9, showlegend=False, hoverinfo="skip"))
+    for sgn in (1,-1):
+        traces.append(go.Scatter3d(
+            x=[sgn*0.71, sgn*14.0], y=[1.4, 14.5], z=[0.012, 0.012],
+            mode="lines", line=dict(color="#8ea8c3", width=3),
+            opacity=0.22, showlegend=False, hoverinfo="skip"))
+    # goma del pitcher
+    traces.append(go.Scatter3d(
+        x=[-0.9,0.9], y=[60.5,60.5], z=[0.83,0.83],
+        mode="lines", line=dict(color="#e8eef4", width=6),
+        opacity=0.55, showlegend=False, hoverinfo="skip"))
     return traces
+
+N_ZONE_TRACES=len(_zone_traces())
 
 
 def _pitch_label(row):
@@ -68,8 +96,9 @@ def _pitch_label(row):
 
 def build_3d_figure(rows, n_points=50, title=""):
     """
-    Figura 3D animada con múltiples pitches superpuestos.
-    Play/pause + slider de frames para scrubbing manual.
+    v4.8 — Vista 3D nivel broadcast (referencia: Statcast 3D de MLB):
+    tubos con glow por tipo de pitcheo, pelota con anillo de color al cruzar
+    la zona translúcida, escena nocturna. Play/pausa + slider de scrubbing.
     """
     paths, labels, colors, metas = [], [], [], []
     for i, (_, r) in enumerate(rows.iterrows()):
@@ -85,52 +114,113 @@ def build_3d_figure(rows, n_points=50, title=""):
     base = list(_zone_traces())
     for path, lab, col in zip(paths, labels, colors):
         xs, ys, zs, _ = zip(*path)
+        # halo (glow) + tubo principal
         base.append(go.Scatter3d(x=xs, y=ys, z=zs, mode="lines",
-            line=dict(color=col, width=6), opacity=0.85, name=lab))
-        base.append(go.Scatter3d(x=[xs[0]], y=[ys[0]], z=[zs[0]], mode="markers",
-            marker=dict(size=7, color=col, symbol="circle"),
+            line=dict(color=col, width=18), opacity=0.18,
             showlegend=False, hoverinfo="skip"))
-    # frames: bola avanzando + estela
-    n_zone = len(_zone_traces())
+        base.append(go.Scatter3d(x=xs, y=ys, z=zs, mode="lines",
+            line=dict(color=col, width=8), opacity=0.95, name=lab,
+            hovertemplate=lab+"<extra></extra>"))
+        # release: bolita blanca pequeña
+        base.append(go.Scatter3d(x=[xs[0]], y=[ys[0]], z=[zs[0]], mode="markers",
+            marker=dict(size=5, color="#ffffff",
+                        line=dict(color=col, width=2)),
+            showlegend=False, hoverinfo="skip"))
+        # cruce del plato: pelota blanca con anillo del color del pitcheo
+        base.append(go.Scatter3d(x=[xs[-1]], y=[ys[-1]], z=[zs[-1]], mode="markers",
+            marker=dict(size=15, color=col, opacity=0.95),
+            showlegend=False, hoverinfo="skip"))
+        base.append(go.Scatter3d(x=[xs[-1]], y=[ys[-1]], z=[zs[-1]], mode="markers",
+            marker=dict(size=9, color="#ffffff"),
+            showlegend=False, hovertemplate=lab+"<extra></extra>"))
+    # frames de animación: estela + pelota (anillo + núcleo blanco)
+    n_zone = N_ZONE_TRACES
+    per_pitch_base = 5
+    anim_start = n_zone + per_pitch_base*len(paths)
+    for path, col in zip(paths, colors):
+        base.append(go.Scatter3d(x=[path[0][0]], y=[path[0][1]], z=[path[0][2]],
+            mode="lines", line=dict(color=col, width=10), opacity=0.0,
+            showlegend=False, hoverinfo="skip"))
+        base.append(go.Scatter3d(x=[path[0][0]], y=[path[0][1]], z=[path[0][2]],
+            mode="markers", marker=dict(size=13, color=col, opacity=0.0),
+            showlegend=False, hoverinfo="skip"))
+        base.append(go.Scatter3d(x=[path[0][0]], y=[path[0][1]], z=[path[0][2]],
+            mode="markers", marker=dict(size=8, color="#ffffff", opacity=0.0),
+            showlegend=False, hoverinfo="skip"))
     frames = []
     for k in range(n_points):
         data = []
         for path, col in zip(paths, colors):
             xs, ys, zs, _ = zip(*path[:k+1])
             data.append(go.Scatter3d(x=xs, y=ys, z=zs, mode="lines",
-                                     line=dict(color=col, width=6)))
+                line=dict(color="#ffffff", width=3), opacity=0.6))
             data.append(go.Scatter3d(x=[xs[-1]], y=[ys[-1]], z=[zs[-1]],
-                mode="markers", marker=dict(size=9, color=col)))
+                mode="markers", marker=dict(size=13, color=col, opacity=0.95)))
+            data.append(go.Scatter3d(x=[xs[-1]], y=[ys[-1]], z=[zs[-1]],
+                mode="markers", marker=dict(size=8, color="#ffffff", opacity=1.0)))
         frames.append(go.Frame(data=data,
-            traces=list(range(n_zone, n_zone+2*len(paths))), name=str(k)))
+            traces=list(range(anim_start, anim_start+3*len(paths))), name=str(k)))
     fig = go.Figure(data=base, frames=frames)
     steps = [dict(method="animate", label=f"{k}",
                   args=[[str(k)], {"frame":{"duration":0,"redraw":True},
                                    "mode":"immediate"}]) for k in range(n_points)]
+    ax_off=dict(visible=False, showgrid=False, zeroline=False,
+                showbackground=False, showticklabels=False)
     fig.update_layout(
-        title=title, height=620, margin=dict(l=0, r=0, t=40, b=0),
-        legend=dict(orientation="h", y=1.02),
+        title=dict(text=title, font=dict(color="#e8eef4", size=15), x=0.03),
+        height=640, margin=dict(l=0, r=0, t=44, b=0),
+        paper_bgcolor=SCENE_BG, showlegend=False,
         scene=dict(
-            xaxis=dict(title="x (ft)", range=[-4, 4]),
-            yaxis=dict(title="distancia (ft)", range=[56, -2]),
-            zaxis=dict(title="altura (ft)", range=[0, 8]),
-            aspectmode="manual", aspectratio=dict(x=1, y=3.2, z=1),
-            camera=dict(eye=dict(x=0.0, y=-2.4, z=0.25),
-                        center=dict(x=0, y=-0.25, z=-0.05)),
+            bgcolor=SCENE_BG,
+            xaxis={**ax_off, "range":[-4.5,4.5]},
+            yaxis={**ax_off, "range":[58,-1.5]},
+            zaxis={**ax_off, "range":[-0.1,8]},
+            aspectmode="manual", aspectratio=dict(x=1, y=3.1, z=0.95),
+            camera=dict(eye=dict(x=0.55, y=-1.75, z=0.42),
+                        center=dict(x=0, y=-0.28, z=-0.08)),
         ),
-        updatemenus=[dict(type="buttons", showactive=False, y=0, x=0, xanchor="left",
+        updatemenus=[dict(type="buttons", showactive=False, y=0.02, x=0.02,
+            xanchor="left", bgcolor="rgba(255,255,255,0.08)",
+            font=dict(color="#e8eef4"), bordercolor="rgba(255,255,255,0.25)",
             buttons=[
                 dict(label="▶ Play", method="animate",
                      args=[None, {"frame":{"duration":28,"redraw":True},
                                   "fromcurrent":True,"transition":{"duration":0}}]),
-                dict(label="⏸ Pausa", method="animate",
+                dict(label="⏸", method="animate",
                      args=[[None], {"frame":{"duration":0,"redraw":False},
                                     "mode":"immediate"}]),
             ])],
-        sliders=[dict(steps=steps, active=0, y=-0.02, x=0.12, len=0.85,
-                      currentvalue=dict(prefix="frame "))],
+        sliders=[dict(steps=steps, active=0, y=0.0, x=0.18, len=0.78,
+                      currentvalue=dict(prefix="frame ", font=dict(color="#8ea8c3")),
+                      font=dict(color="#8ea8c3"),
+                      bgcolor="rgba(255,255,255,0.10)",
+                      bordercolor="rgba(0,0,0,0)")],
     )
     return fig, metas
+
+
+def arsenal_panel_html(pitcher, rows):
+    """Panel de arsenal estilo broadcast MLB: [(color, label, n, velo_avg)]."""
+    items="".join(
+        f'<div style="display:flex;align-items:center;gap:10px;padding:8px 14px;'
+        f'border-bottom:1px solid rgba(255,255,255,.14)">'
+        f'<span style="width:15px;height:15px;border-radius:50%;background:#fff;'
+        f'border:4px solid {c};display:inline-block;flex:none"></span>'
+        f'<span style="flex:1;font-weight:700;font-size:.82rem;'
+        f'letter-spacing:.05em;text-transform:uppercase">{lbl}</span>'
+        f'<span style="font-weight:800;font-size:1.0rem">{n}</span>'
+        f'<span style="opacity:.8;font-size:.72rem;width:56px;text-align:right">'
+        f'{velo}</span></div>'
+        for c,lbl,n,velo in rows)
+    return (
+        f'<div style="background:linear-gradient(165deg,#b5122e 0%,#8e0e24 100%);'
+        f'border-radius:12px;color:#fff;overflow:hidden;'
+        f'box-shadow:0 8px 22px rgba(0,0,0,.35);font-family:inherit">'
+        f'<div style="padding:12px 14px 4px 14px;font-size:1.08rem;font-weight:800;'
+        f'letter-spacing:.02em">{pitcher}</div>'
+        f'<div style="padding:0 14px 9px 14px;font-size:.62rem;letter-spacing:.22em;'
+        f'opacity:.85;border-bottom:2px solid rgba(255,255,255,.3)">PITCH ARSENAL</div>'
+        f'{items}</div>')
 
 
 def _gif_bytes(rows, n_points=40, fps=24):
@@ -252,11 +342,22 @@ def render_trajectory_mode(df, lmeta):
             st.info("Selecciona al menos un pitch.")
         else:
             fig, metas = build_3d_figure(sel, n_points=n_pts,
-                                         title=f"{pitcher} — vista detrás del catcher")
+                                         title=f"{pitcher} · PITCH TRAJECTORIES")
             if fig is None:
                 st.warning("No se pudo reconstruir ninguna trayectoria (datos faltantes).")
             else:
-                st.plotly_chart(fig, use_container_width=True)
+                col_panel, col_fig = st.columns([1, 3.4])
+                with col_panel:
+                    # panel de arsenal estilo broadcast (conteos del dataset filtrado)
+                    ars=[]
+                    for i,(pt,g) in enumerate(pdf.groupby("TaggedPitchType")):
+                        v=(f'{g["RelSpeed"].mean():.1f} mph'
+                           if "RelSpeed" in g.columns and g["RelSpeed"].notna().any() else "—")
+                        ars.append((_pt_color(pt,i), str(pt), len(g), v))
+                    ars.sort(key=lambda r: -r[2])
+                    st.markdown(arsenal_panel_html(pitcher, ars), unsafe_allow_html=True)
+                with col_fig:
+                    st.plotly_chart(fig, use_container_width=True)
                 if metas:
                     mdf = pd.DataFrame(metas)
                     mdf.insert(0, "Pitch", [_pitch_label(r) for _, r in sel.iterrows()][:len(mdf)])
