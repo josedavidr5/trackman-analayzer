@@ -51,6 +51,7 @@ from core.metrics import (
 from core.pitching import (build_usage_by_count, arsenal_stuff, movement_points)
 from core.pitching import pitch_summary as build_pitch_summary
 from core.pitching import pitch_discipline as compute_pitch_discipline
+from viz import pitching as vpitch
 
 warnings.filterwarnings("ignore")
 matplotlib.use("Agg")
@@ -1679,81 +1680,86 @@ def export_hitting_pdf(batter, monthly_df, disc_dict, result_df, split_df, fig_s
 # RENDER: PITCHING
 # ══════════════════════════════════════════════════════════════════════════════
 def render_pitching(df, master_df, lmeta):
-    st.markdown('<div class="sh">⚾ Pitching Dashboard</div>',unsafe_allow_html=True)
+    st.markdown('<div class="sh">⚾ Pitching Dashboard</div>', unsafe_allow_html=True)
     st.info(f"📋 **{lmeta['label']} benchmarks** · "
             f"Elite velo: {lmeta['velo_elite']}+ mph · Avg: {lmeta['velo_avg']} mph · "
             f"{lmeta['context']}")
     if "Pitcher" not in df.columns or df["Pitcher"].dropna().empty:
         st.error("No 'Pitcher' column."); return
-    pitchers=sorted(df["Pitcher"].dropna().unique())
-    selected=player_search_select(pitchers,"Select Pitcher","pitcher")
-    pf=df[df["Pitcher"]==selected].copy(); n=len(pf)
-    if n<15: st.warning(f"⚠️ **{selected}** — only **{n}** pitches (min: 15).")
-    avg_v=pf["RelSpeed"].mean() if "RelSpeed" in pf.columns else np.nan
-    max_v=pf["RelSpeed"].max() if "RelSpeed" in pf.columns else np.nan
-    avg_sp=pf["SpinRate"].mean() if "SpinRate" in pf.columns else np.nan
-    c1,c2,c3,c4,c5=st.columns(5)
-    with c1: st.metric("Pitches",f"{n:,}")
-    with c2: st.metric("Avg Velo",fmt(avg_v," mph"),delta=f"Max {max_v:.1f}" if not np.isnan(max_v) else None)
-    with c3: st.metric("Avg Spin",fmt(avg_sp," rpm",0))
-    with c4: st.metric("Pitches Types",str(pf["TaggedPitchType"].nunique()))
-    with c5: st.metric("Distinct Dates",str(pf["Date"].dt.date.nunique()) if "Date" in pf.columns else "—")
-    st.markdown("<br>",unsafe_allow_html=True)
-    # v4.5 — Percentile rankings estilo Savant vs la liga cargada
+    pitchers = sorted(df["Pitcher"].dropna().unique())
+    selected = player_search_select(pitchers, "Select Pitcher", "pitcher")
+    pf = df[df["Pitcher"] == selected].copy(); n = len(pf)
+    if n < 15:
+        st.warning(f"⚠️ **{selected}** — only **{n}** pitches (min: 15).")
+    avg_v = pf["RelSpeed"].mean() if "RelSpeed" in pf.columns else np.nan
+    max_v = pf["RelSpeed"].max() if "RelSpeed" in pf.columns else np.nan
+    avg_sp = pf["SpinRate"].mean() if "SpinRate" in pf.columns else np.nan
+    c1, c2, c3, c4, c5 = st.columns(5)
+    with c1: st.metric("Pitches", f"{n:,}")
+    with c2: st.metric("Avg Velo", fmt(avg_v, " mph"),
+                       delta=f"Max {max_v:.1f}" if not np.isnan(max_v) else None)
+    with c3: st.metric("Avg Spin", fmt(avg_sp, " rpm", 0))
+    with c4: st.metric("Pitches Types", str(pf["TaggedPitchType"].nunique()))
+    with c5: st.metric("Distinct Dates",
+                       str(pf["Date"].dt.date.nunique()) if "Date" in pf.columns else "—")
+    st.markdown("<br>", unsafe_allow_html=True)
     render_percentile_section(
         selected, league_pitcher_table(df), PITCHER_INVERT,
-        defaults={"Avg Velo":float(lmeta.get("velo_avg",88)),
-                  "Max Velo":float(lmeta.get("velo_elite",93)),
-                  "Avg Spin":2200.0,"Zone %":48.0,"Whiff %":24.0,
-                  "Chase %":28.0,"K %":22.0,"BB %":8.5},
+        defaults={"Avg Velo": float(lmeta.get("velo_avg", 88)),
+                  "Max Velo": float(lmeta.get("velo_elite", 93)),
+                  "Avg Spin": 2200.0, "Zone %": 48.0, "Whiff %": 24.0,
+                  "Chase %": 28.0, "K %": 22.0, "BB %": 8.5},
         key="pit")
-    tab1,tab2,tab3,tab4=st.tabs(["📋 Summary","📍 Location","📊 Trends","🏟️ Stadium"])
+
+    # Figuras Plotly (una sola fuente; también alimentan el PDF)
+    fig_mov = vpitch.movement_bubble(movement_points(pf), selected,
+                                     show_individual=st.session_state.get("arsenal_show_ind", True))
+    fig_loc = vpitch.location_scatter(pf, selected)
+    fig_kde = vpitch.hot_zone(pf, selected)
+    fig_vel = vpitch.velo_trend(pf, selected)
+
+    tab1, tab2, tab3, tab4 = st.tabs(["📋 Summary", "📍 Location", "📊 Trends", "🏟️ Stadium"])
     with tab1:
-        st.markdown('<div class="sh">Arsenal</div>',unsafe_allow_html=True)
-        summary_df=build_pitch_summary(pf)
-        st.dataframe(summary_df,use_container_width=True,hide_index=True)
-        csv_dl(summary_df,f"{selected}_summary.csv")
-        st.markdown('<div class="sh">Discipline</div>',unsafe_allow_html=True)
-        disc_df=compute_pitch_discipline(pf)
-        if disc_df.empty: st.info("PitchCall column required.")
+        st.markdown('<div class="sh">🎯 Arsenal — Stuff</div>', unsafe_allow_html=True)
+        st.checkbox("Mostrar pitcheos individuales", value=True, key="arsenal_show_ind")
+        st.plotly_chart(fig_mov, use_container_width=True)
+        summary_df = arsenal_stuff(pf)
+        st.dataframe(summary_df, use_container_width=True, hide_index=True)
+        csv_dl(summary_df, f"{selected}_arsenal.csv")
+        st.markdown('<div class="sh">Discipline</div>', unsafe_allow_html=True)
+        disc_df = compute_pitch_discipline(pf)
+        if disc_df.empty:
+            st.info("PitchCall column required.")
         else:
-            st.dataframe(disc_df,use_container_width=True,hide_index=True)
-            csv_dl(disc_df,f"{selected}_discipline.csv")
+            st.dataframe(disc_df, use_container_width=True, hide_index=True)
+            csv_dl(disc_df, f"{selected}_discipline.csv")
     with tab2:
-        cl,cr=st.columns(2)
-        fig_loc=plot_pitch_locations(pf,selected)
-        fig_kde=plot_hot_zone(pf,selected)
-        with cl: st.pyplot(fig_loc,use_container_width=True)
-        with cr: st.pyplot(fig_kde,use_container_width=True)
-        st.markdown('<div class="sh">Location by Pitch Type</div>',unsafe_allow_html=True)
-        fig_bytype=plot_location_by_pitch(pf,selected)
-        st.pyplot(fig_bytype,use_container_width=True); plt.close(fig_bytype)
+        cl, cr = st.columns(2)
+        with cl: st.plotly_chart(fig_loc, use_container_width=True)
+        with cr: st.plotly_chart(fig_kde, use_container_width=True)
+        st.markdown('<div class="sh">Location by Pitch Type</div>', unsafe_allow_html=True)
+        st.plotly_chart(vpitch.location_by_pitch(pf, selected), use_container_width=True)
     with tab3:
-        fig_vel=plot_velocity_tendency(pf,selected)
-        st.pyplot(fig_vel,use_container_width=True)
-        st.markdown("<br>",unsafe_allow_html=True)
-        fig_usage=plot_usage_by_count(pf,selected)
-        st.pyplot(fig_usage,use_container_width=True); plt.close(fig_usage)
-        st.markdown("<br>",unsafe_allow_html=True)
-        fig_mov=plot_movement_profile(pf,selected)
-        st.pyplot(fig_mov,use_container_width=True)
+        st.plotly_chart(fig_vel, use_container_width=True)
+        st.markdown("<br>", unsafe_allow_html=True)
+        st.plotly_chart(vpitch.usage_heatmap(build_usage_by_count(pf), selected),
+                        use_container_width=True)
     with tab4:
         st.info("Stadium analysis coming soon.")
-    st.markdown('<div class="sh">📤 Export</div>',unsafe_allow_html=True)
-    dr=f"{df['Date'].min().date()}→{df['Date'].max().date()}" if df["Date"].notna().any() else "All dates"
-    ec1,ec2=st.columns(2)
+    st.markdown('<div class="sh">📤 Export</div>', unsafe_allow_html=True)
+    dr = (f"{df['Date'].min().date()}→{df['Date'].max().date()}"
+          if df["Date"].notna().any() else "All dates")
+    ec1, ec2 = st.columns(2)
     with ec1:
-        # v4.2: PDF built only on demand — avoids regenerating on every rerun
-        if st.button("📄 Build PDF Report",key="btn_pdf_pitch"):
+        if st.button("📄 Build PDF Report", key="btn_pdf_pitch"):
             with st.spinner("Building PDF…"):
-                pdf_b=export_pitching_pdf(selected,summary_df,
-                                           disc_df if not disc_df.empty else pd.DataFrame(),
-                                           fig_loc,fig_kde,fig_vel,fig_mov,dr)
-            st.download_button("⬇️ Download PDF",pdf_b,f"{selected}_pitching.pdf",
-                               "application/pdf",key="dl_pdf_pitch")
+                pdf_b = export_pitching_pdf(selected, summary_df,
+                                            disc_df if not disc_df.empty else pd.DataFrame(),
+                                            fig_loc, fig_kde, fig_vel, fig_mov, dr)
+            st.download_button("⬇️ Download PDF", pdf_b, f"{selected}_pitching.pdf",
+                               "application/pdf", key="dl_pdf_pitch")
     with ec2:
-        csv_dl(pf,f"{selected}_raw.csv","⬇️ Raw CSV")
-    for f in [fig_loc,fig_kde,fig_vel,fig_mov]: plt.close(f)
+        csv_dl(pf, f"{selected}_raw.csv", "⬇️ Raw CSV")
 
 # ══════════════════════════════════════════════════════════════════════════════
 # RENDER: HITTING
