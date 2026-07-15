@@ -53,3 +53,82 @@ def movement_bubble(points, name, show_individual=True):
                         title="Induced Vertical Break (in) · ride →")
     fig.update_layout(**lay)
     return fig
+
+
+def location_scatter(df, name):
+    if not {"PlateLocSide", "PlateLocHeight"}.issubset(df.columns):
+        return theme.empty_fig("No location data")
+    loc = df.dropna(subset=["PlateLocSide", "PlateLocHeight"])
+    if loc.empty:
+        return theme.empty_fig("No location data")
+    types = list(loc["TaggedPitchType"].dropna().unique())
+    cmap = theme.color_map(types)
+    fig = go.Figure()
+    for pt, g in loc.groupby("TaggedPitchType"):
+        velo = (g["RelSpeed"] if "RelSpeed" in g.columns
+                else pd.Series([np.nan] * len(g), index=g.index))
+        fig.add_trace(go.Scatter(
+            x=g["PlateLocSide"], y=g["PlateLocHeight"], mode="markers", name=str(pt),
+            marker=dict(size=8, color=cmap.get(pt, theme.GREY), opacity=0.75,
+                        line=dict(width=0.5, color="white")),
+            customdata=np.stack([velo.values], axis=-1),
+            hovertemplate=(f"<b>{pt}</b><br>Velo: %{{customdata[0]:.1f}} mph<br>"
+                           "side %{x:.2f} ft · height %{y:.2f} ft<extra></extra>")))
+    lay = theme.base_layout("Pitch Locations", f"{name} · vista del catcher")
+    lay["shapes"] = theme.strike_zone_shapes()
+    lay["xaxis"] = dict(range=[-2.0, 2.0], gridcolor=theme.GRID, zeroline=False)
+    lay["yaxis"] = dict(range=[0.4, 4.6], gridcolor=theme.GRID, zeroline=False,
+                        scaleanchor="x", scaleratio=1)
+    fig.update_layout(**lay)
+    return fig
+
+
+def hot_zone(df, name):
+    if not {"PlateLocSide", "PlateLocHeight"}.issubset(df.columns):
+        return theme.empty_fig("No location data")
+    loc = df.dropna(subset=["PlateLocSide", "PlateLocHeight"])
+    if len(loc) < 5:
+        return theme.empty_fig("Se requieren ≥ 5 pitches")
+    fig = go.Figure(go.Histogram2dContour(
+        x=loc["PlateLocSide"], y=loc["PlateLocHeight"],
+        colorscale=[[0, "#ffffff"], [0.5, "#f6b6a8"], [1, "#D22D49"]],
+        contours=dict(coloring="fill"), line=dict(width=0),
+        hovertemplate="side %{x:.2f} · height %{y:.2f}<br>densidad %{z}<extra></extra>"))
+    lay = theme.base_layout("Ubicación — Frecuencia", f"{name} · {len(loc)} pitches")
+    lay["shapes"] = theme.strike_zone_shapes()
+    lay["xaxis"] = dict(range=[-2.0, 2.0], gridcolor=theme.GRID, zeroline=False)
+    lay["yaxis"] = dict(range=[0.4, 4.6], gridcolor=theme.GRID, zeroline=False,
+                        scaleanchor="x", scaleratio=1)
+    fig.update_layout(**lay)
+    return fig
+
+
+def location_by_pitch(df, name, max_types=6):
+    if not {"PlateLocSide", "PlateLocHeight"}.issubset(df.columns):
+        return theme.empty_fig("No location data")
+    loc = df.dropna(subset=["PlateLocSide", "PlateLocHeight"])
+    types = (loc["TaggedPitchType"].value_counts().head(max_types).index.tolist()
+             if not loc.empty else [])
+    if not types:
+        return theme.empty_fig("No location data")
+    cmap = theme.color_map(types)
+    ncols = min(len(types), 3)
+    nrows = int(np.ceil(len(types) / ncols))
+    titles = [f"{t} · n={int((loc['TaggedPitchType'] == t).sum())}" for t in types]
+    fig = make_subplots(rows=nrows, cols=ncols, subplot_titles=titles,
+                        horizontal_spacing=0.06, vertical_spacing=0.12)
+    for i, pt in enumerate(types):
+        r, c = i // ncols + 1, i % ncols + 1
+        g = loc[loc["TaggedPitchType"] == pt]
+        fig.add_trace(go.Scatter(
+            x=g["PlateLocSide"], y=g["PlateLocHeight"], mode="markers", showlegend=False,
+            marker=dict(size=6, color=cmap[pt], opacity=0.7, line=dict(width=0.4, color="white")),
+            hovertemplate=f"{pt}<br>%{{x:.2f}}, %{{y:.2f}}<extra></extra>"), row=r, col=c)
+        fig.add_shape(theme.strike_zone_shapes()[0], row=r, col=c)
+        fig.update_xaxes(range=[-2.0, 2.0], gridcolor=theme.GRID, zeroline=False, row=r, col=c)
+        fig.update_yaxes(range=[0.4, 4.6], gridcolor=theme.GRID, zeroline=False, row=r, col=c)
+    fig.update_layout(paper_bgcolor=theme.BG, plot_bgcolor=theme.BG,
+                      font=dict(color=theme.TEXT, size=11),
+                      title=dict(text=f"<b>Ubicación por tipo — {name}</b>", x=0.01),
+                      margin=dict(l=40, r=20, t=72, b=40), height=300 * nrows)
+    return fig

@@ -28,3 +28,45 @@ def test_movement_bubble_empty():
     # Stronger assertions: degraded to empty-state figure
     assert len(fig.data) == 0
     assert fig.layout.annotations
+
+
+def _loc_df():
+    return pd.DataFrame({
+        "TaggedPitchType": ["Slider"] * 6 + ["Fastball"] * 6,
+        "PlateLocSide": [0.1, -0.2, 0.3, 0.0, 0.5, -0.1, 0.2, -0.3, 0.1, 0.0, 0.4, -0.2],
+        "PlateLocHeight": [2.5, 2.4, 2.6, 2.1, 3.0, 2.2, 2.5, 2.7, 2.3, 2.9, 2.4, 2.6],
+        "RelSpeed": [84, 85, 84, 86, 83, 85, 94, 95, 93, 96, 94, 95],
+    })
+
+
+def test_location_scatter_ok_and_empty():
+    # Non-empty case
+    fig = vp.location_scatter(_loc_df(), "P")
+    assert isinstance(fig, go.Figure)
+    assert len(fig.data) >= 1
+    # Empty case
+    fig_empty = vp.location_scatter(pd.DataFrame(), "P")
+    assert isinstance(fig_empty, go.Figure)
+    assert fig_empty.layout.annotations
+
+
+def test_hot_zone_ok_and_sparse():
+    # Non-empty case
+    fig = vp.hot_zone(_loc_df(), "P")
+    assert isinstance(fig, go.Figure)
+    assert len(fig.data) == 1
+    # Sparse case
+    fig_sparse = vp.hot_zone(_loc_df().head(3), "P")
+    assert isinstance(fig_sparse, go.Figure)
+    assert fig_sparse.layout.annotations
+
+
+def test_location_by_pitch_ok_and_empty():
+    # Non-empty case
+    fig = vp.location_by_pitch(_loc_df(), "P")
+    assert isinstance(fig, go.Figure)
+    assert len(fig.data) >= 1
+    # Empty case
+    fig_empty = vp.location_by_pitch(pd.DataFrame(), "P")
+    assert isinstance(fig_empty, go.Figure)
+    assert fig_empty.layout.annotations
