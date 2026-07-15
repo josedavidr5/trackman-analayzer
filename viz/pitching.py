@@ -134,3 +134,44 @@ def location_by_pitch(df, name, max_types=6):
                       title=dict(text=f"<b>Ubicación por tipo — {name}</b>", x=0.01),
                       margin=dict(l=40, r=20, t=72, b=40), height=300 * nrows)
     return fig
+
+
+def velo_trend(df, name):
+    if "RelSpeed" not in df.columns or "Date" not in df.columns:
+        return theme.empty_fig("No velocity data")
+    vel = df.dropna(subset=["RelSpeed", "Date"])
+    if vel.empty:
+        return theme.empty_fig("No velocity data")
+    types = list(vel["TaggedPitchType"].dropna().unique())
+    cmap = theme.color_map(types)
+    fig = go.Figure()
+    for pt, g in vel.groupby("TaggedPitchType"):
+        daily = g.sort_values("Date").groupby("Date")["RelSpeed"].mean().reset_index()
+        fig.add_trace(go.Scatter(
+            x=daily["Date"], y=daily["RelSpeed"], mode="lines+markers", name=str(pt),
+            line=dict(color=cmap.get(pt, theme.GREY), width=2),
+            marker=dict(size=6, line=dict(width=0.6, color="white")),
+            hovertemplate=f"<b>{pt}</b><br>%{{x|%Y-%m-%d}}<br>%{{y:.1f}} mph<extra></extra>"))
+    lay = theme.base_layout("Velocity Tendency", name)
+    lay["xaxis"] = dict(title="Date", gridcolor=theme.GRID)
+    lay["yaxis"] = dict(title="Avg Velocity (mph)", gridcolor=theme.GRID)
+    fig.update_layout(**lay)
+    return fig
+
+
+def usage_heatmap(tab, name):
+    if tab is None or tab.empty:
+        return theme.empty_fig("Balls/Strikes columns required")
+    z = tab.values
+    zmax = max(float(z.max()), 1.0)
+    fig = go.Figure(go.Heatmap(
+        z=z, x=list(tab.columns), y=list(tab.index), colorscale="Blues", zmin=0, zmax=zmax,
+        text=[[f"{v:.0f}" if v > 0 else "" for v in row] for row in z],
+        texttemplate="%{text}", textfont=dict(size=10),
+        colorbar=dict(title="Usage %"),
+        hovertemplate="%{y} · count %{x}<br>%{z:.1f}%<extra></extra>"))
+    lay = theme.base_layout("Pitch Usage % by Count", name)
+    lay["xaxis"] = dict(title="Count (Balls-Strikes)")
+    lay["yaxis"] = dict(autorange="reversed")
+    fig.update_layout(**lay)
+    return fig

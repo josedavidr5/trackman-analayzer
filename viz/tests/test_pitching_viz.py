@@ -1,6 +1,6 @@
 import plotly.graph_objects as go
 import pandas as pd
-from core.pitching import movement_points
+from core.pitching import movement_points, build_usage_by_count
 from viz import pitching as vp
 
 
@@ -78,3 +78,33 @@ def test_location_builders_missing_pitchtype_degrade():
     f1 = vp.location_scatter(df, "P")
     f2 = vp.location_by_pitch(df, "P")
     assert f1.layout.annotations and f2.layout.annotations
+
+
+def test_velo_trend_ok_and_empty():
+    df = pd.DataFrame({
+        "TaggedPitchType": ["Slider", "Slider", "Fastball"],
+        "RelSpeed": [84, 85, 94],
+        "Date": pd.to_datetime(["2026-06-01", "2026-06-02", "2026-06-01"]),
+    })
+    # Non-empty case
+    fig = vp.velo_trend(df, "P")
+    assert isinstance(fig, go.Figure)
+    assert len(fig.data) >= 1
+    # Empty case
+    fig_empty = vp.velo_trend(pd.DataFrame(), "P")
+    assert isinstance(fig_empty, go.Figure)
+    assert fig_empty.layout.annotations
+
+
+def test_usage_heatmap_ok_and_empty():
+    df = pd.DataFrame({"TaggedPitchType": ["Slider", "Fastball", "Slider"],
+                       "Count": ["0-0", "0-0", "1-1"]})
+    tab = build_usage_by_count(df)
+    # Non-empty case
+    fig = vp.usage_heatmap(tab, "P")
+    assert isinstance(fig, go.Figure)
+    assert len(fig.data) == 1
+    # Empty case
+    fig_empty = vp.usage_heatmap(pd.DataFrame(), "P")
+    assert isinstance(fig_empty, go.Figure)
+    assert fig_empty.layout.annotations
