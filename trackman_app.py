@@ -42,6 +42,17 @@ import pandas as pd
 import seaborn as sns
 import streamlit as st
 
+from core.metrics import (
+    STATCAST_PITCH_COLORS, PITCH_PALETTE, pitch_color, safe_pct,
+    TERMINAL_RESULTS, SWING_CALLS, CONTACT_CALLS,
+    ZONE_HALF_WIDTH, ZONE_BOTTOM, ZONE_TOP, WOBA_W,
+    count_pa, in_zone_mask, batted_ball_mask, barrel_mask, count_k_bb, compute_woba,
+)
+from core.pitching import (build_usage_by_count, arsenal_stuff, movement_points)
+from core.pitching import pitch_summary as build_pitch_summary
+from core.pitching import pitch_discipline as compute_pitch_discipline
+from viz import pitching as vpitch
+
 warnings.filterwarnings("ignore")
 matplotlib.use("Agg")
 
@@ -60,20 +71,6 @@ SAVANT_BG      = "#ffffff"
 SAVANT_GRID    = "#f0f0f0"
 SAVANT_TEXT    = "#333333"
 SAVANT_ACCENT  = "#1f77b4"
-
-PITCH_PALETTE = [SAVANT_BLUE, SAVANT_RED, SAVANT_GREEN, SAVANT_ORANGE,
-                 SAVANT_PURPLE, SAVANT_BROWN, SAVANT_PINK, SAVANT_GREY,
-                 "#2ca02c", "#ff9896", "#98df8a", "#c5b0d5"]
-
-# v4.5 — Colores oficiales Statcast/Baseball Savant por tipo de pitcheo
-STATCAST_PITCH_COLORS={
-    "4-Seam":"#D22D49","Fastball":"#D22D49","2-Seam":"#DE6A04","Sinker":"#FE9D00",
-    "Cutter":"#933F2C","Slider":"#C3BD0E","Sweeper":"#DDB33A","Curve":"#00D1ED",
-    "Knuckle Curve":"#6236CD","Change":"#1DBE3A","Split":"#3BACAC",
-    "Knuckleball":"#3C44CD","Screwball":"#60DB33",
-}
-def pitch_color(pt, idx=0):
-    return STATCAST_PITCH_COLORS.get(str(pt), PITCH_PALETTE[idx % len(PITCH_PALETTE)])
 
 # Gradiente de percentiles Savant: azul (bajo) → gris (50) → rojo (alto)
 _PCT_CMAP=matplotlib.colors.LinearSegmentedColormap.from_list(
@@ -308,83 +305,11 @@ def draw_plate(ax):
     ax.fill([-0.71,-0.71,0,0.71,0.71],[0.35,0.15,0,0.15,0.35],
             color=SAVANT_GREY, alpha=0.15, zorder=2)
 
-def safe_pct(num, denom): return round(100*num/denom,1) if denom>0 else 0.0
 def csv_dl(df, fname, label="⬇️ Download CSV"):
     st.download_button(label, df.to_csv(index=False).encode(), fname, "text/csv")
 def fmt(v, suffix="", decimals=1):
     if v is None or (isinstance(v, float) and np.isnan(v)): return "—"
     return f"{v:.{decimals}f}{suffix}"
-
-# ══════════════════════════════════════════════════════════════════════════════
-# CORE SABERMETRIC HELPERS (v4.2 — correct denominators & true zone)
-# ══════════════════════════════════════════════════════════════════════════════
-TERMINAL_RESULTS={"1B","2B","3B","HR","Out","K","BB","HBP","FC","Error","SacFly","SacBunt"}
-SWING_CALLS={"StrikeSwinging","FoulBall","FoulBallFieldable","FoulBallNotFieldable","InPlay"}
-CONTACT_CALLS={"FoulBall","FoulBallFieldable","FoulBallNotFieldable","InPlay"}
-# Rulebook zone (±0.71 ft) + one ball radius of margin, typical 1.5–3.5 ft height
-ZONE_HALF_WIDTH=0.83
-ZONE_BOTTOM, ZONE_TOP=1.5, 3.5
-# wOBA linear weights (FanGraphs ~2023, stable enough for scouting use)
-WOBA_W={"BB":0.69,"HBP":0.72,"1B":0.89,"2B":1.27,"3B":1.62,"HR":2.10}
-
-def count_pa(df):
-    """Plate appearances = pitches whose PlayResult is a terminal outcome."""
-    if "PlayResult" in df.columns:
-        pa=int(df["PlayResult"].astype(str).isin(TERMINAL_RESULTS).sum())
-        if pa>0: return pa
-    if "PitchCall" in df.columns:                      # rough fallback
-        return int(df["PitchCall"].astype(str).isin({"InPlay","HitByPitch"}).sum())
-    return 0
-
-def in_zone_mask(df):
-    """(mask, has_location) — true strike-zone membership from PlateLoc columns."""
-    if {"PlateLocSide","PlateLocHeight"}.issubset(df.columns) and df["PlateLocSide"].notna().any():
-        m=((df["PlateLocSide"].abs()<=ZONE_HALF_WIDTH)
-           &(df["PlateLocHeight"].between(ZONE_BOTTOM,ZONE_TOP)))
-        return m.fillna(False), True
-    return pd.Series(False,index=df.index), False
-
-def batted_ball_mask(df):
-    """Balls put in play — denominator for HH% / Barrel%."""
-    if "PitchCall" in df.columns:
-        m=df["PitchCall"].astype(str).eq("InPlay")
-        if m.any(): return m
-    if "ExitSpeed" in df.columns: return df["ExitSpeed"].notna()
-    return pd.Series(False,index=df.index)
-
-def barrel_mask(df, barrel_ev_base=98):
-    """
-    Savant-style barrel: EV ≥ 98 opens an LA window of 26–30° that widens
-    ~1°/mph downward and ~1.1°/mph upward until 8–50° at 116+ mph.
-    barrel_ev_base rescales for College/HS levels (e.g. 92 → treated as 98).
-    """
-    if not {"ExitSpeed","Angle"}.issubset(df.columns):
-        return pd.Series(False,index=df.index)
-    ev=df["ExitSpeed"]+(98-barrel_ev_base)
-    la=df["Angle"]
-    lo=(26-(ev-98)).clip(lower=8)
-    hi=(30+(ev-98)*(20/18)).clip(upper=50)
-    return ((ev>=98)&(la>=lo)&(la<=hi)).fillna(False)
-
-def count_k_bb(df):
-    """(K, BB) counted once per PA from PlayResult, PitchCall fallback for K."""
-    kk=bb=0
-    if "PlayResult" in df.columns:
-        pr=df["PlayResult"].astype(str)
-        kk=int(pr.eq("K").sum()); bb=int(pr.eq("BB").sum())
-    if kk==0 and "PitchCall" in df.columns:
-        kk=int(df["PitchCall"].astype(str).isin({"StrikeoutSwinging","StrikeoutCalled"}).sum())
-    return kk,bb
-
-def compute_woba(df):
-    """wOBA from tagged PlayResults. Returns np.nan without PA data."""
-    pa=count_pa(df)
-    if pa==0 or "PlayResult" not in df.columns: return np.nan
-    pr=df["PlayResult"].astype(str)
-    num=sum(w*int(pr.eq(res).sum()) for res,w in WOBA_W.items())
-    # exclude sac bunts from denominator (standard wOBA convention)
-    denom=pa-int(pr.eq("SacBunt").sum())
-    return round(num/denom,3) if denom>0 else np.nan
 
 # ══════════════════════════════════════════════════════════════════════════════
 # NAME NORMALISATION (unchanged from v4)
@@ -844,55 +769,6 @@ def player_search_select(all_players, label, key):
 # ══════════════════════════════════════════════════════════════════════════════
 # ANALYTICS BUILDERS
 # ══════════════════════════════════════════════════════════════════════════════
-def build_pitch_summary(df):
-    total=len(df); rows=[]
-    for pt,grp in df.groupby("TaggedPitchType"):
-        r={"Pitch":pt,"Count":len(grp),"Usage %":safe_pct(len(grp),total)}
-        if "RelSpeed" in grp.columns:
-            r["Avg mph"]=round(grp["RelSpeed"].mean(),1)
-            r["Max mph"]=round(grp["RelSpeed"].max(),1)
-        for col,alias in [("SpinRate","Spin"),("InducedVertBreak","IVB"),("HorzBreak","HB")]:
-            r[alias]=round(grp[col].mean(),1) if col in grp.columns else np.nan
-        rows.append(r)
-    out=pd.DataFrame(rows)
-    if out.empty: return out
-    out["_fb"]=out["Pitch"].str.lower().str.contains("fastball|4-seam|2-seam").astype(int)
-    return out.sort_values(["_fb","Count"],ascending=[False,False]).drop(columns="_fb").reset_index(drop=True)
-
-def compute_pitch_discipline(df):
-    """
-    Per-pitch-type discipline (v4.2):
-      Zone %  = pitches inside the true zone (PlateLoc) / located pitches
-      Chase % = swings at pitches OUT of zone / out-of-zone pitches
-    Falls back to PitchCall approximation when location data is missing.
-    """
-    if "PitchCall" not in df.columns: return pd.DataFrame()
-    ZONE_CALLS={"StrikeCalled","StrikeSwinging","FoulBall","FoulBallFieldable","FoulBallNotFieldable","InPlay"}
-    rows=[]
-    for pt,grp in df.groupby("TaggedPitchType"):
-        pc=grp["PitchCall"].astype(str)
-        n=len(grp)
-        sw_m=pc.isin(SWING_CALLS); ct_m=pc.isin(CONTACT_CALLS); wh_m=pc.eq("StrikeSwinging")
-        sw,ct,wh=int(sw_m.sum()),int(ct_m.sum()),int(wh_m.sum())
-        zone_m,has_loc=in_zone_mask(grp)
-        if has_loc:
-            located=grp["PlateLocSide"].notna()&grp["PlateLocHeight"].notna()
-            n_loc=int(located.sum())
-            in_z=int(zone_m.sum())
-            oz=located&~zone_m
-            zone_pct=safe_pct(in_z,n_loc)
-            chase_pct=safe_pct(int((sw_m&oz).sum()),max(int(oz.sum()),1))
-        else:
-            in_z=int(pc.isin(ZONE_CALLS).sum())
-            zone_pct=safe_pct(in_z,n)
-            chase_pct=safe_pct(max(0,sw-ct),max(n-in_z,1))
-        rows.append({"Pitch":pt,"Count":n,
-                     "Zone %":zone_pct,"Swing %":safe_pct(sw,n),
-                     "Contact %":safe_pct(ct,max(sw,1)),
-                     "Chase %":chase_pct,
-                     "Whiff %":safe_pct(wh,max(sw,1))})
-    return pd.DataFrame(rows).sort_values("Count",ascending=False).reset_index(drop=True)
-
 def build_play_result_table(df):
     if "PlayResult" not in df.columns: return pd.DataFrame()
     counts=df["PlayResult"].value_counts().reset_index()
@@ -1019,35 +895,6 @@ def build_league_hitting_avg(df, lmeta=None):
 # ══════════════════════════════════════════════════════════════════════════════
 # SAVANT-STYLE CHARTS
 # ══════════════════════════════════════════════════════════════════════════════
-def plot_pitch_locations(df, name):
-    fig, ax = setup_savant_fig((5.5, 6))
-    loc=df.dropna(subset=["PlateLocSide","PlateLocHeight"])
-    for idx,(pt,g) in enumerate(loc.groupby("TaggedPitchType") if not loc.empty else []):
-        color=pitch_color(pt,idx)
-        ax.scatter(g["PlateLocSide"],g["PlateLocHeight"],label=pt,color=color,
-                   alpha=0.75,s=38,edgecolors="white",linewidths=0.5,zorder=6)
-    if loc.empty:
-        ax.text(.5,.5,"No location data",ha="center",va="center",color=SAVANT_GREY,transform=ax.transAxes)
-    draw_savant_zone(ax); draw_plate(ax)
-    style_zone_ax(ax)
-    savant_title(ax,"Pitch Locations",f"{name} · vista del catcher")
-    ax.legend(fontsize=8,framealpha=0.9,facecolor="white",edgecolor="#e5e5e5",
-              labelcolor=SAVANT_TEXT,loc="upper right",borderpad=0.6)
-    return fig
-
-def plot_hot_zone(df, name):
-    """v4.6 — Heatmap de frecuencia estilo Savant: blanco→rojo, sin arcoíris."""
-    fig, ax = setup_savant_fig((5.2, 5.8))
-    loc=df.dropna(subset=["PlateLocSide","PlateLocHeight"])
-    if len(loc)>=5:
-        zone_heatmap_ax(ax,loc["PlateLocSide"],loc["PlateLocHeight"])
-    else:
-        ax.text(.5,.5,"Se requieren ≥ 5 pitches",ha="center",va="center",
-                color=SAVANT_GREY,transform=ax.transAxes)
-    draw_savant_zone(ax); draw_plate(ax)
-    style_zone_ax(ax)
-    savant_title(ax,"Ubicación — Frecuencia",f"{name} · {len(loc)} pitches · vista del catcher")
-    return fig
 
 def plot_spray_chart(df, name):
     fig, ax = setup_savant_fig((6.5, 6.5))
@@ -1203,105 +1050,9 @@ def plot_la_distribution(df, name):
     ax.legend(fontsize=8,framealpha=0.6,edgecolor="none",facecolor="none",labelcolor=SAVANT_TEXT)
     return fig
 
-def plot_velocity_tendency(df, name):
-    fig, ax = setup_savant_fig((11, 3.8))
-    vel=df.dropna(subset=["RelSpeed","Date"]) if "RelSpeed" in df.columns else pd.DataFrame()
-    if vel.empty:
-        ax.text(.5,.5,"No velocity data",ha="center",va="center",color=SAVANT_GREY,transform=ax.transAxes)
-        fig.tight_layout(); return fig
-    for idx,(pt,g) in enumerate(vel.groupby("TaggedPitchType")):
-        daily=g.sort_values("Date").groupby("Date")["RelSpeed"].agg(["mean","std"]).reset_index()
-        daily.columns=["Date","mean","std"]; daily["std"]=daily["std"].fillna(0)
-        color=pitch_color(pt,idx)
-        ax.fill_between(daily["Date"],daily["mean"]-daily["std"],daily["mean"]+daily["std"],
-                        alpha=0.08,color=color,zorder=1)
-        ax.plot(daily["Date"],daily["mean"],label=pt,color=color,lw=2.0,
-                marker="o",ms=4.5,markeredgecolor="white",markeredgewidth=0.6,
-                alpha=0.90,zorder=5,solid_capstyle="round")
-        if not daily.empty:
-            last=daily.iloc[-1]
-            ax.annotate(f'{last["mean"]:.1f}',(last["Date"],last["mean"]),
-                        xytext=(4,4),textcoords="offset points",fontsize=8,color=color,fontweight="bold")
-    ax.set_xlabel("Date", fontsize=9); ax.set_ylabel("Avg Velocity (mph)", fontsize=9)
-    savant_title(ax,"Velocity Tendency",name)
-    style_savant_ax(ax)
-    ax.legend(fontsize=7.5,framealpha=0.6,edgecolor="none",facecolor="none",labelcolor=SAVANT_TEXT)
-    fig.autofmt_xdate(rotation=28,ha="right"); return fig
-
-def plot_movement_profile(df, name):
-    """v4.5 — Break plot estilo Baseball Savant: anillos concéntricos cada 6",
-    puntos por pitch en colores Statcast y promedio grande por tipo."""
-    fig, ax = setup_savant_fig((6.8, 6.4))
-    needed={"HorzBreak","InducedVertBreak"}
-    if not needed.issubset(df.columns):
-        ax.text(.5,.5,"No movement data",ha="center",va="center",color=SAVANT_GREY,transform=ax.transAxes)
-        fig.tight_layout(); return fig
-    sub=df.dropna(subset=["HorzBreak","InducedVertBreak"])
-    ax.grid(False)
-    # anillos de referencia cada 6 pulgadas (sello visual de Savant)
-    for rr in (6,12,18,24):
-        ax.add_patch(patches.Circle((0,0),rr,fill=False,color="#e6e6e6",lw=1.1,zorder=1))
-        ax.text(0.4,rr-1.6,f'{rr}"',fontsize=7.5,color="#c4c4c4",zorder=1)
-    ax.axhline(0,color="#d2d2d2",lw=1.2,zorder=2)
-    ax.axvline(0,color="#d2d2d2",lw=1.2,zorder=2)
-    for idx,(pt,g) in enumerate(sub.groupby("TaggedPitchType")):
-        x,y,n=g["HorzBreak"].mean(),g["InducedVertBreak"].mean(),len(g)
-        color=pitch_color(pt,idx)
-        ax.scatter(g["HorzBreak"],g["InducedVertBreak"],color=color,alpha=0.45,
-                   s=24,edgecolors="white",linewidths=0.4,zorder=4)
-        ax.scatter(x,y,s=300,color=color,alpha=0.97,
-                   edgecolors="white",linewidths=2.0,zorder=6)
-        ax.annotate(f"{pt} ({n})",(x,y),
-                    xytext=(12, 10+(idx%3)*16),textcoords="offset points",
-                    fontsize=9,color="#222",fontweight="bold",zorder=7,
-                    bbox=dict(boxstyle="round,pad=0.22",facecolor="white",
-                              edgecolor=color,lw=1.2,alpha=0.92))
-    lim=27
-    ax.set_xlim(-lim,lim); ax.set_ylim(-lim,lim)
-    ax.set_aspect("equal",adjustable="box")
-    ax.set_xlabel("Horizontal Break (in) · lado del brazo →", fontsize=9)
-    ax.set_ylabel("Induced Vertical Break (in) · ride →", fontsize=9)
-    for sp in ax.spines.values(): sp.set_visible(False)
-    ax.tick_params(colors="#999", labelsize=8)
-    savant_title(ax,"Pitch Movement",f"{name} · vista del catcher")
-    return fig
-
 # ══════════════════════════════════════════════════════════════════════════════
 # NEW ANALYTICS v4.2 — usage by count, rolling EV, per-pitch heatmaps
 # ══════════════════════════════════════════════════════════════════════════════
-def build_usage_by_count(df):
-    """Pitch usage % by ball-strike count (rows=pitch, cols=count)."""
-    if "Count" not in df.columns or df["Count"].isna().all(): return pd.DataFrame()
-    sub=df[df["Count"].notna()&~df["Count"].str.contains("<NA>",na=True)]
-    if sub.empty: return pd.DataFrame()
-    order=[f"{b}-{s}" for b in range(4) for s in range(3)]
-    tab=pd.crosstab(sub["TaggedPitchType"],sub["Count"],normalize="columns")*100
-    cols=[c for c in order if c in tab.columns]
-    return tab[cols].round(1) if cols else pd.DataFrame()
-
-def plot_usage_by_count(df, name):
-    tab=build_usage_by_count(df)
-    fig, ax = setup_savant_fig((11, 0.55*max(len(tab),4)+2))
-    if tab.empty:
-        ax.text(.5,.5,"Balls/Strikes columns required",ha="center",va="center",
-                color=SAVANT_GREY,transform=ax.transAxes)
-        ax.axis("off"); return fig
-    im=ax.imshow(tab.values,cmap="Blues",aspect="auto",vmin=0,vmax=max(tab.values.max(),1))
-    ax.set_xticks(range(len(tab.columns)),tab.columns,fontsize=8.5)
-    ax.set_yticks(range(len(tab.index)),tab.index,fontsize=8.5)
-    for i in range(tab.shape[0]):
-        for j in range(tab.shape[1]):
-            v=tab.values[i,j]
-            if v>0:
-                ax.text(j,i,f"{v:.0f}",ha="center",va="center",fontsize=7.5,
-                        color="#ffffff" if v>tab.values.max()*0.6 else SAVANT_TEXT)
-    ax.set_xlabel("Count (Balls-Strikes)",fontsize=9)
-    savant_title(ax,"Pitch Usage % by Count",name)
-    ax.grid(False)
-    for s in ax.spines.values(): s.set_visible(False)
-    cb=fig.colorbar(im,ax=ax,pad=0.02,shrink=0.8); cb.set_label("Usage %",fontsize=8)
-    return fig
-
 def plot_rolling_ev(df, name, window=15):
     """Rolling exit-velocity trend over batted balls, chronological."""
     fig, ax = setup_savant_fig((11, 3.8))
@@ -1322,39 +1073,6 @@ def plot_rolling_ev(df, name, window=15):
     savant_title(ax,"Rolling Exit Velocity",name)
     style_savant_ax(ax)
     ax.legend(fontsize=8,framealpha=0.6,edgecolor="none",facecolor="none",labelcolor=SAVANT_TEXT)
-    return fig
-
-def plot_location_by_pitch(df, name, max_types=6):
-    """v4.6 — Small multiples estilo Savant: heatmap blanco→color del pitcheo."""
-    loc=df.dropna(subset=["PlateLocSide","PlateLocHeight"])
-    types=(loc["TaggedPitchType"].value_counts().head(max_types).index.tolist()
-           if not loc.empty else [])
-    n=len(types)
-    if n==0:
-        fig, ax = setup_savant_fig((6,4))
-        ax.text(.5,.5,"No location data",ha="center",va="center",
-                color=SAVANT_GREY,transform=ax.transAxes)
-        ax.axis("off"); return fig
-    ncols=min(n,3); nrows=int(np.ceil(n/ncols))
-    fig, axes = plt.subplots(nrows,ncols,figsize=(3.3*ncols,3.9*nrows),layout="constrained")
-    fig.patch.set_facecolor(SAVANT_BG)
-    axes=np.atleast_1d(axes).ravel()
-    for idx,(ax,pt) in enumerate(zip(axes,types)):
-        g=loc[loc["TaggedPitchType"]==pt]
-        ax.set_facecolor(SAVANT_BG)
-        color=pitch_color(pt,idx)
-        if len(g)>=4:
-            zone_heatmap_ax(ax,g["PlateLocSide"],g["PlateLocHeight"],base_color=color)
-        else:
-            ax.scatter(g["PlateLocSide"],g["PlateLocHeight"],s=30,color=color,
-                       alpha=0.8,edgecolors="white",linewidths=0.5,zorder=6)
-        draw_savant_zone(ax); draw_plate(ax)
-        style_zone_ax(ax)
-        ax.set_title(f"{pt}  ·  n={len(g)}",fontsize=10,fontweight="bold",
-                     color=color if color!="#C3BD0E" else "#8a860a")
-    for ax in axes[n:]: ax.axis("off")
-    fig.suptitle(f"Ubicación por tipo de pitcheo — {name}",
-                 fontsize=12,fontweight="bold",color=SAVANT_TEXT)
     return fig
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1700,6 +1418,18 @@ def render_top_plays(df, lmeta, tournament=""):
 # ══════════════════════════════════════════════════════════════════════════════
 def _fig_to_img(src_fig):
     import matplotlib.image as mpimg
+    # Figura Plotly → ruta por kaleido (viz.export). Si falla, se propaga la excepción
+    # y el llamador (_pdf_two_charts/_pdf_single_chart) dibuja "Chart unavailable".
+    try:
+        import plotly.graph_objects as _go
+        if isinstance(src_fig, _go.Figure):
+            from viz.export import plotly_png_array
+            arr = plotly_png_array(src_fig)
+            if arr is None:
+                raise RuntimeError("kaleido no disponible")
+            return arr
+    except ImportError:
+        pass
     img_buf = io.BytesIO()
     src_fig.savefig(img_buf, format="png", dpi=150,
                     bbox_inches="tight", facecolor=src_fig.get_facecolor())
@@ -1802,81 +1532,89 @@ def export_hitting_pdf(batter, monthly_df, disc_dict, result_df, split_df, fig_s
 # RENDER: PITCHING
 # ══════════════════════════════════════════════════════════════════════════════
 def render_pitching(df, master_df, lmeta):
-    st.markdown('<div class="sh">⚾ Pitching Dashboard</div>',unsafe_allow_html=True)
+    st.markdown('<div class="sh">⚾ Pitching Dashboard</div>', unsafe_allow_html=True)
     st.info(f"📋 **{lmeta['label']} benchmarks** · "
             f"Elite velo: {lmeta['velo_elite']}+ mph · Avg: {lmeta['velo_avg']} mph · "
             f"{lmeta['context']}")
     if "Pitcher" not in df.columns or df["Pitcher"].dropna().empty:
         st.error("No 'Pitcher' column."); return
-    pitchers=sorted(df["Pitcher"].dropna().unique())
-    selected=player_search_select(pitchers,"Select Pitcher","pitcher")
-    pf=df[df["Pitcher"]==selected].copy(); n=len(pf)
-    if n<15: st.warning(f"⚠️ **{selected}** — only **{n}** pitches (min: 15).")
-    avg_v=pf["RelSpeed"].mean() if "RelSpeed" in pf.columns else np.nan
-    max_v=pf["RelSpeed"].max() if "RelSpeed" in pf.columns else np.nan
-    avg_sp=pf["SpinRate"].mean() if "SpinRate" in pf.columns else np.nan
-    c1,c2,c3,c4,c5=st.columns(5)
-    with c1: st.metric("Pitches",f"{n:,}")
-    with c2: st.metric("Avg Velo",fmt(avg_v," mph"),delta=f"Max {max_v:.1f}" if not np.isnan(max_v) else None)
-    with c3: st.metric("Avg Spin",fmt(avg_sp," rpm",0))
-    with c4: st.metric("Pitches Types",str(pf["TaggedPitchType"].nunique()))
-    with c5: st.metric("Distinct Dates",str(pf["Date"].dt.date.nunique()) if "Date" in pf.columns else "—")
-    st.markdown("<br>",unsafe_allow_html=True)
-    # v4.5 — Percentile rankings estilo Savant vs la liga cargada
+    pitchers = sorted(df["Pitcher"].dropna().unique())
+    selected = player_search_select(pitchers, "Select Pitcher", "pitcher")
+    pf = df[df["Pitcher"] == selected].copy(); n = len(pf)
+    if n < 15:
+        st.warning(f"⚠️ **{selected}** — only **{n}** pitches (min: 15).")
+    avg_v = pf["RelSpeed"].mean() if "RelSpeed" in pf.columns else np.nan
+    max_v = pf["RelSpeed"].max() if "RelSpeed" in pf.columns else np.nan
+    avg_sp = pf["SpinRate"].mean() if "SpinRate" in pf.columns else np.nan
+    c1, c2, c3, c4, c5 = st.columns(5)
+    with c1: st.metric("Pitches", f"{n:,}")
+    with c2: st.metric("Avg Velo", fmt(avg_v, " mph"),
+                       delta=f"Max {max_v:.1f}" if not np.isnan(max_v) else None)
+    with c3: st.metric("Avg Spin", fmt(avg_sp, " rpm", 0))
+    with c4: st.metric("Pitches Types", str(pf["TaggedPitchType"].nunique()))
+    with c5: st.metric("Distinct Dates",
+                       str(pf["Date"].dt.date.nunique()) if "Date" in pf.columns else "—")
+    st.markdown("<br>", unsafe_allow_html=True)
     render_percentile_section(
         selected, league_pitcher_table(df), PITCHER_INVERT,
-        defaults={"Avg Velo":float(lmeta.get("velo_avg",88)),
-                  "Max Velo":float(lmeta.get("velo_elite",93)),
-                  "Avg Spin":2200.0,"Zone %":48.0,"Whiff %":24.0,
-                  "Chase %":28.0,"K %":22.0,"BB %":8.5},
+        defaults={"Avg Velo": float(lmeta.get("velo_avg", 88)),
+                  "Max Velo": float(lmeta.get("velo_elite", 93)),
+                  "Avg Spin": 2200.0, "Zone %": 48.0, "Whiff %": 24.0,
+                  "Chase %": 28.0, "K %": 22.0, "BB %": 8.5},
         key="pit")
-    tab1,tab2,tab3,tab4=st.tabs(["📋 Summary","📍 Location","📊 Trends","🏟️ Stadium"])
+
+    # Figuras Plotly (una sola fuente; también alimentan el PDF)
+    # El checkbox "arsenal_show_ind" se define abajo en el tab Summary por layout,
+    # pero su valor se necesita aquí antes; Streamlit ya aplicó el valor nuevo del
+    # widget a session_state antes de este rerun, así que el .get() lee el valor actual.
+    fig_mov = vpitch.movement_bubble(movement_points(pf), selected,
+                                     show_individual=st.session_state.get("arsenal_show_ind", True))
+    fig_loc = vpitch.location_scatter(pf, selected)
+    fig_kde = vpitch.hot_zone(pf, selected)
+    fig_vel = vpitch.velo_trend(pf, selected)
+
+    tab1, tab2, tab3, tab4 = st.tabs(["📋 Summary", "📍 Location", "📊 Trends", "🏟️ Stadium"])
     with tab1:
-        st.markdown('<div class="sh">Arsenal</div>',unsafe_allow_html=True)
-        summary_df=build_pitch_summary(pf)
-        st.dataframe(summary_df,use_container_width=True,hide_index=True)
-        csv_dl(summary_df,f"{selected}_summary.csv")
-        st.markdown('<div class="sh">Discipline</div>',unsafe_allow_html=True)
-        disc_df=compute_pitch_discipline(pf)
-        if disc_df.empty: st.info("PitchCall column required.")
+        st.markdown('<div class="sh">🎯 Arsenal — Stuff</div>', unsafe_allow_html=True)
+        st.checkbox("Mostrar pitcheos individuales", value=True, key="arsenal_show_ind")
+        st.plotly_chart(fig_mov, use_container_width=True)
+        summary_df = arsenal_stuff(pf)
+        st.dataframe(summary_df, use_container_width=True, hide_index=True)
+        csv_dl(summary_df, f"{selected}_arsenal.csv")
+        st.markdown('<div class="sh">Discipline</div>', unsafe_allow_html=True)
+        disc_df = compute_pitch_discipline(pf)
+        if disc_df.empty:
+            st.info("PitchCall column required.")
         else:
-            st.dataframe(disc_df,use_container_width=True,hide_index=True)
-            csv_dl(disc_df,f"{selected}_discipline.csv")
+            st.dataframe(disc_df, use_container_width=True, hide_index=True)
+            csv_dl(disc_df, f"{selected}_discipline.csv")
     with tab2:
-        cl,cr=st.columns(2)
-        fig_loc=plot_pitch_locations(pf,selected)
-        fig_kde=plot_hot_zone(pf,selected)
-        with cl: st.pyplot(fig_loc,use_container_width=True)
-        with cr: st.pyplot(fig_kde,use_container_width=True)
-        st.markdown('<div class="sh">Location by Pitch Type</div>',unsafe_allow_html=True)
-        fig_bytype=plot_location_by_pitch(pf,selected)
-        st.pyplot(fig_bytype,use_container_width=True); plt.close(fig_bytype)
+        cl, cr = st.columns(2)
+        with cl: st.plotly_chart(fig_loc, use_container_width=True)
+        with cr: st.plotly_chart(fig_kde, use_container_width=True)
+        st.markdown('<div class="sh">Location by Pitch Type</div>', unsafe_allow_html=True)
+        st.plotly_chart(vpitch.location_by_pitch(pf, selected), use_container_width=True)
     with tab3:
-        fig_vel=plot_velocity_tendency(pf,selected)
-        st.pyplot(fig_vel,use_container_width=True)
-        st.markdown("<br>",unsafe_allow_html=True)
-        fig_usage=plot_usage_by_count(pf,selected)
-        st.pyplot(fig_usage,use_container_width=True); plt.close(fig_usage)
-        st.markdown("<br>",unsafe_allow_html=True)
-        fig_mov=plot_movement_profile(pf,selected)
-        st.pyplot(fig_mov,use_container_width=True)
+        st.plotly_chart(fig_vel, use_container_width=True)
+        st.markdown("<br>", unsafe_allow_html=True)
+        st.plotly_chart(vpitch.usage_heatmap(build_usage_by_count(pf), selected),
+                        use_container_width=True)
     with tab4:
         st.info("Stadium analysis coming soon.")
-    st.markdown('<div class="sh">📤 Export</div>',unsafe_allow_html=True)
-    dr=f"{df['Date'].min().date()}→{df['Date'].max().date()}" if df["Date"].notna().any() else "All dates"
-    ec1,ec2=st.columns(2)
+    st.markdown('<div class="sh">📤 Export</div>', unsafe_allow_html=True)
+    dr = (f"{df['Date'].min().date()}→{df['Date'].max().date()}"
+          if df["Date"].notna().any() else "All dates")
+    ec1, ec2 = st.columns(2)
     with ec1:
-        # v4.2: PDF built only on demand — avoids regenerating on every rerun
-        if st.button("📄 Build PDF Report",key="btn_pdf_pitch"):
+        if st.button("📄 Build PDF Report", key="btn_pdf_pitch"):
             with st.spinner("Building PDF…"):
-                pdf_b=export_pitching_pdf(selected,summary_df,
-                                           disc_df if not disc_df.empty else pd.DataFrame(),
-                                           fig_loc,fig_kde,fig_vel,fig_mov,dr)
-            st.download_button("⬇️ Download PDF",pdf_b,f"{selected}_pitching.pdf",
-                               "application/pdf",key="dl_pdf_pitch")
+                pdf_b = export_pitching_pdf(selected, summary_df,
+                                            disc_df if not disc_df.empty else pd.DataFrame(),
+                                            fig_loc, fig_kde, fig_vel, fig_mov, dr)
+            st.download_button("⬇️ Download PDF", pdf_b, f"{selected}_pitching.pdf",
+                               "application/pdf", key="dl_pdf_pitch")
     with ec2:
-        csv_dl(pf,f"{selected}_raw.csv","⬇️ Raw CSV")
-    for f in [fig_loc,fig_kde,fig_vel,fig_mov]: plt.close(f)
+        csv_dl(pf, f"{selected}_raw.csv", "⬇️ Raw CSV")
 
 # ══════════════════════════════════════════════════════════════════════════════
 # RENDER: HITTING
