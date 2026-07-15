@@ -1,7 +1,8 @@
 """Analítica de pitching pura — pandas/numpy. Sin Streamlit ni matplotlib."""
 import numpy as np
 import pandas as pd
-from core.metrics import safe_pct, in_zone_mask, SWING_CALLS, CONTACT_CALLS
+from core.metrics import (safe_pct, in_zone_mask, SWING_CALLS, CONTACT_CALLS,
+                          ZONE_HALF_WIDTH, ZONE_BOTTOM, ZONE_TOP)
 
 def pitch_summary(df):
     """Por tipo: Count, Usage %, Avg/Max mph, Spin, IVB, HB. FB primero, luego por Count."""
@@ -111,3 +112,46 @@ def movement_points(df):
             "whiff": _fnum(s.get("Whiff %")), "csw": _fnum(s.get("CSW %")),
         })
     return out
+
+def whiff_csw_zone_grid(df, min_swings=4, min_pitches=5):
+    """Grid 5×5 de tasas Whiff%/CSW% por celda (vista catcher).
+
+    El 3×3 interno se alinea a la zona de strike; la banda externa (una celda por
+    lado) captura el área de chase — los pitcheos fuera del extent se asignan por
+    clamp a la celda de borde. Puro; NO requiere TaggedPitchType (el filtrado por
+    tipo se hace antes de llamar).
+    """
+    cell_x = (2 * ZONE_HALF_WIDTH) / 3.0
+    cell_z = (ZONE_TOP - ZONE_BOTTOM) / 3.0
+    x_edges = [-ZONE_HALF_WIDTH - cell_x, -ZONE_HALF_WIDTH, -ZONE_HALF_WIDTH + cell_x,
+               ZONE_HALF_WIDTH - cell_x, ZONE_HALF_WIDTH, ZONE_HALF_WIDTH + cell_x]
+    z_edges = [ZONE_BOTTOM - cell_z, ZONE_BOTTOM, ZONE_BOTTOM + cell_z,
+               ZONE_TOP - cell_z, ZONE_TOP, ZONE_TOP + cell_z]
+    empty = {"x_edges": x_edges, "z_edges": z_edges, "cells": [], "total_pitches": 0}
+    if not {"PlateLocSide", "PlateLocHeight"}.issubset(df.columns) or "PitchCall" not in df.columns:
+        return empty
+    loc = df.dropna(subset=["PlateLocSide", "PlateLocHeight"])
+    if loc.empty:
+        return empty
+    pc = loc["PitchCall"].astype(str)
+    # 5 celdas por eje: digitize contra los 4 bordes internos, clamp a 0..4
+    xi = np.clip(np.digitize(loc["PlateLocSide"].to_numpy(), x_edges[1:5]), 0, 4)
+    zi = np.clip(np.digitize(loc["PlateLocHeight"].to_numpy(), z_edges[1:5]), 0, 4)
+    swing = pc.isin(SWING_CALLS).to_numpy()
+    whiff = (pc == "StrikeSwinging").to_numpy()
+    called = (pc == "StrikeCalled").to_numpy()
+    cells = []
+    for iz in range(5):
+        for ix in range(5):
+            m = (xi == ix) & (zi == iz)
+            n = int(m.sum())
+            ns = int(swing[m].sum())
+            nw = int(whiff[m].sum())
+            nc = int(called[m].sum())
+            cells.append({
+                "ix": ix, "iz": iz, "n_pitches": n, "n_swings": ns,
+                "whiffs": nw, "called": nc,
+                "whiff_pct": safe_pct(nw, ns), "csw_pct": safe_pct(nc + nw, n),
+                "whiff_reliable": ns >= min_swings, "csw_reliable": n >= min_pitches,
+            })
+    return {"x_edges": x_edges, "z_edges": z_edges, "cells": cells, "total_pitches": int(len(loc))}
