@@ -1565,6 +1565,18 @@ def render_top_plays(df, lmeta, tournament=""):
 # ══════════════════════════════════════════════════════════════════════════════
 def _fig_to_img(src_fig):
     import matplotlib.image as mpimg
+    # Figura Plotly → ruta por kaleido (viz.export). Si falla, se propaga la excepción
+    # y el llamador (_pdf_two_charts/_pdf_single_chart) dibuja "Chart unavailable".
+    try:
+        import plotly.graph_objects as _go
+        if isinstance(src_fig, _go.Figure):
+            from viz.export import plotly_png_array
+            arr = plotly_png_array(src_fig)
+            if arr is None:
+                raise RuntimeError("kaleido no disponible")
+            return arr
+    except ImportError:
+        pass
     img_buf = io.BytesIO()
     src_fig.savefig(img_buf, format="png", dpi=150,
                     bbox_inches="tight", facecolor=src_fig.get_facecolor())
