@@ -99,3 +99,113 @@ def catcher_scene_layout(title=""):
             camera=dict(eye=dict(x=0.0, y=-1.95, z=0.42),
                         center=dict(x=0, y=-0.20, z=-0.05),
                         up=dict(x=0, y=0, z=1))))
+
+
+def pitch_ribbon_traces(path, color, label=""):
+    """Cinta glossy por capas (glow + cuerpo + núcleo brillante) sobre los puntos reales."""
+    xs = [p[0] for p in path]; ys = [p[1] for p in path]; zs = [p[2] for p in path]
+    body = go.Scatter3d(x=xs, y=ys, z=zs, mode="lines", line=dict(color=color, width=9),
+                        opacity=0.98, name=label)
+    if label:
+        body.update(hovertemplate=label + "<extra></extra>")
+    else:
+        body.update(hoverinfo="skip", showlegend=False)
+    return [
+        go.Scatter3d(x=xs, y=ys, z=zs, mode="lines", line=dict(color=color, width=20),
+                     opacity=0.16, showlegend=False, hoverinfo="skip"),
+        body,
+        go.Scatter3d(x=xs, y=ys, z=zs, mode="lines", line=dict(color=_lighten(color), width=3),
+                     opacity=0.9, showlegend=False, hoverinfo="skip"),
+    ]
+
+
+def ball_marker_traces(x, y, z, color, label="", core="#ffffff", opacity=1.0):
+    """Pelota blanca con halo de color (anillo semitransparente + núcleo). Etiqueta opcional."""
+    halo = go.Scatter3d(x=[x], y=[y], z=[z], mode="markers",
+                        marker=dict(size=17, color=color, opacity=0.45 * opacity),
+                        showlegend=False, hoverinfo="skip")
+    corem = go.Scatter3d(x=[x], y=[y], z=[z], mode="markers",
+                         marker=dict(size=9, color=core, opacity=opacity,
+                                     line=dict(color=color, width=2)), showlegend=False)
+    if label:
+        corem.update(hovertemplate=label + "<extra></extra>")
+    else:
+        corem.update(hoverinfo="skip")
+    out = [halo, corem]
+    if label:
+        out.append(go.Scatter3d(x=[x], y=[y], z=[z + 0.5], mode="text", text=[label],
+                                textfont=dict(color="#12324a", size=11),
+                                showlegend=False, hoverinfo="skip"))
+    return out
+
+
+def _pitch_label(row):
+    import pandas as pd
+    v = row.get("RelSpeed"); s = row.get("SpinRate")
+    bits = [str(row.get("TaggedPitchType", "?"))]
+    if pd.notna(v): bits.append(f"{float(v):.1f} mph")
+    if pd.notna(s): bits.append(f"{float(s):.0f} rpm")
+    return " · ".join(bits)
+
+
+def build_pitch_animation(rows, n_points=50, title=""):
+    """Animación 3D restyled (catcher view): cintas glossy + pelota con halo por el path real."""
+    paths, labels, colors, metas = [], [], [], []
+    for i, (_, r) in enumerate(rows.iterrows()):
+        try:
+            paths.append(compute_pitch_path(r, n_points=n_points))
+        except ValueError:
+            continue
+        labels.append(_pitch_label(r)); colors.append(pt_color(r.get("TaggedPitchType"), i))
+        metas.append(pitch_metrics(r))
+    if not paths:
+        return None, []
+    base = list(field_scene_traces())
+    for path, lab, col in zip(paths, labels, colors):
+        base += pitch_ribbon_traces(path, col, lab)
+        base += ball_marker_traces(path[0][0], path[0][1], path[0][2], col, core="#ffffff")
+        base += ball_marker_traces(path[-1][0], path[-1][1], path[-1][2], col, label="")
+    # traces animados (invisibles al inicio): estela + halo + núcleo por pitcheo
+    anim_start = len(base)
+    for path, col in zip(paths, colors):
+        p0 = path[0]
+        base.append(go.Scatter3d(x=[p0[0]], y=[p0[1]], z=[p0[2]], mode="lines",
+            line=dict(color="#ffffff", width=4), opacity=0.0, showlegend=False, hoverinfo="skip"))
+        base.append(go.Scatter3d(x=[p0[0]], y=[p0[1]], z=[p0[2]], mode="markers",
+            marker=dict(size=15, color=col, opacity=0.0), showlegend=False, hoverinfo="skip"))
+        base.append(go.Scatter3d(x=[p0[0]], y=[p0[1]], z=[p0[2]], mode="markers",
+            marker=dict(size=9, color="#ffffff", opacity=0.0), showlegend=False, hoverinfo="skip"))
+    frames = []
+    for k in range(n_points):
+        data = []
+        for path, col in zip(paths, colors):
+            seg = path[:k + 1]
+            xs = [p[0] for p in seg]; ys = [p[1] for p in seg]; zs = [p[2] for p in seg]
+            data.append(go.Scatter3d(x=xs, y=ys, z=zs, mode="lines",
+                line=dict(color="#ffffff", width=3), opacity=0.6))
+            data.append(go.Scatter3d(x=[xs[-1]], y=[ys[-1]], z=[zs[-1]], mode="markers",
+                marker=dict(size=15, color=col, opacity=0.5)))
+            data.append(go.Scatter3d(x=[xs[-1]], y=[ys[-1]], z=[zs[-1]], mode="markers",
+                marker=dict(size=9, color="#ffffff", opacity=1.0)))
+        frames.append(go.Frame(data=data,
+            traces=list(range(anim_start, anim_start + 3 * len(paths))), name=str(k)))
+    fig = go.Figure(data=base, frames=frames)
+    steps = [dict(method="animate", label=f"{k}",
+                  args=[[str(k)], {"frame": {"duration": 0, "redraw": True}, "mode": "immediate"}])
+             for k in range(n_points)]
+    fig.update_layout(**catcher_scene_layout(title))
+    fig.update_layout(
+        updatemenus=[dict(type="buttons", showactive=False, y=0.02, x=0.02, xanchor="left",
+            bgcolor="rgba(255,255,255,0.25)", font=dict(color="#12324a"),
+            bordercolor="rgba(0,0,0,0.2)", buttons=[
+                dict(label="▶ Play", method="animate",
+                     args=[None, {"frame": {"duration": 28, "redraw": True},
+                                  "fromcurrent": True, "transition": {"duration": 0}}]),
+                dict(label="⏸", method="animate",
+                     args=[[None], {"frame": {"duration": 0, "redraw": False}, "mode": "immediate"}]),
+            ])],
+        sliders=[dict(steps=steps, active=0, y=0.0, x=0.18, len=0.78,
+                      currentvalue=dict(prefix="frame ", font=dict(color="#12324a")),
+                      font=dict(color="#12324a"), bgcolor="rgba(255,255,255,0.4)",
+                      bordercolor="rgba(0,0,0,0)")])
+    return fig, metas
