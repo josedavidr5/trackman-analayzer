@@ -48,3 +48,14 @@ def test_ribbon_and_ball_trace_counts():
     assert len(s3.pitch_ribbon_traces(path, "#D22D49", "FB")) == 3
     assert len(s3.ball_marker_traces(0, 1.42, 2.8, "#D22D49", label="K")) == 3
     assert len(s3.ball_marker_traces(0, 1.42, 2.8, "#D22D49")) == 2
+
+
+def test_pitches_thrown_ok_and_missing_cols():
+    df = pd.DataFrame({
+        "TaggedPitchType": ["Fastball", "Slider", "Sinker"],
+        "PlateLocSide": [0.1, -0.4, 0.6], "PlateLocHeight": [2.6, 2.0, 3.1],
+        "RelSpeed": [94, 84, 92], "PlayResult": ["K", "Out", "1B"],
+    })
+    assert isinstance(s3.pitches_thrown_figure(df, "t"), go.Figure)
+    # sin columnas de ubicación → figura (no lanza)
+    assert isinstance(s3.pitches_thrown_figure(pd.DataFrame({"TaggedPitchType": ["FB"]})), go.Figure)

@@ -209,3 +209,28 @@ def build_pitch_animation(rows, n_points=50, title=""):
                       font=dict(color="#12324a"), bgcolor="rgba(255,255,255,0.4)",
                       bordercolor="rgba(0,0,0,0)")])
     return fig, metas
+
+
+_TERMINAL = {"1B", "2B", "3B", "HR", "Out", "K", "BB", "HBP", "FC", "Error", "SacFly", "SacBunt"}
+
+
+def pitches_thrown_figure(rows, title=""):
+    """Vista 3D de pelotas ubicadas en la zona, anillo de color por tipo, etiqueta de resultado."""
+    import pandas as pd
+    if not {"PlateLocSide", "PlateLocHeight"}.issubset(rows.columns):
+        fig = go.Figure(data=field_scene_traces())
+        fig.update_layout(**catcher_scene_layout(title or "Pitches Thrown"))
+        fig.add_annotation(text="Sin datos de ubicación", showarrow=False,
+                           font=dict(color="#12324a", size=14))
+        return fig
+    loc = rows.dropna(subset=["PlateLocSide", "PlateLocHeight"])
+    data = list(field_scene_traces())
+    for i, (_, r) in enumerate(loc.iterrows()):
+        col = pt_color(r.get("TaggedPitchType"), i)
+        res = str(r.get("PlayResult", "")) if pd.notna(r.get("PlayResult", np.nan)) else ""
+        label = res if res in _TERMINAL else ""
+        data += ball_marker_traces(float(r["PlateLocSide"]), PLATE_Y, float(r["PlateLocHeight"]),
+                                   col, label=label)
+    fig = go.Figure(data=data)
+    fig.update_layout(**catcher_scene_layout(title or "Pitches Thrown"))
+    return fig
