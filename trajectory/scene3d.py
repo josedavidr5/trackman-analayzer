@@ -38,20 +38,22 @@ def _lighten(hexc, f=0.55):
 def field_scene_traces():
     """Escena diurna híbrida: cielo degradado, césped, tierra, zona 3×3, plato, foul, goma."""
     t = []
-    # cielo: quad vertical lejano con degradado vertexcolor (horizonte→cenit)
+    # cielo: quad vertical lejano con degradado vertexcolor (horizonte→cenit), ancho para
+    # que llene el fondo detrás del campo
+    lo, hi = _rgb(SKY_LO), _rgb(SKY_HI)
     t.append(go.Mesh3d(
-        x=[-42, 42, 42, -42], y=[71, 71, 71, 71], z=[0, 0, 17, 17],
+        x=[-75, 75, 75, -75], y=[58.4, 58.4, 58.4, 58.4], z=[0, 0, 17, 17],
         i=[0, 0], j=[1, 2], k=[2, 3],
-        vertexcolor=[_rgb(SKY_LO), _rgb(SKY_LO), _rgb(SKY_HI), _rgb(SKY_HI)],
+        vertexcolor=[lo, lo, hi, hi],
         hoverinfo="skip", showscale=False, lighting=dict(ambient=1.0, diffuse=0.0)))
-    # césped
+    # césped (ancho de borde a borde para que no flote)
     t.append(go.Mesh3d(
-        x=[-35, 35, 35, -35], y=[-2, -2, 70, 70], z=[0, 0, 0, 0], i=[0, 0], j=[1, 2], k=[2, 3],
+        x=[-62, 62, 62, -62], y=[-3, -3, 58, 58], z=[0, 0, 0, 0], i=[0, 0], j=[1, 2], k=[2, 3],
         color=GRASS, hoverinfo="skip", showscale=False,
-        lighting=dict(ambient=0.78, diffuse=0.5, specular=0.12),
+        lighting=dict(ambient=0.8, diffuse=0.45, specular=0.1),
         lightposition=dict(x=0, y=-30, z=60)))
-    # tierra del home + montículo
-    t.append(go.Mesh3d(x=[-8, 8, 8, -8], y=[-2, -2, 9, 9], z=[0.01] * 4,
+    # tierra del home (círculo/área del plato) + montículo
+    t.append(go.Mesh3d(x=[-11, 11, 11, -11], y=[-3, -3, 12, 12], z=[0.01] * 4,
         i=[0, 0], j=[1, 2], k=[2, 3], color=DIRT, hoverinfo="skip", showscale=False))
     t.append(go.Mesh3d(x=[-6, 6, 6, -6], y=[54, 54, 64, 64], z=[0.01] * 4,
         i=[0, 0], j=[1, 2], k=[2, 3], color=DIRT, opacity=0.92, hoverinfo="skip", showscale=False))
@@ -84,37 +86,42 @@ def field_scene_traces():
 
 
 def catcher_scene_layout(title=""):
-    """Layout compartido con cámara catcher (detrás del plato → pitcher) y aspecto calibrado."""
+    """Layout compartido con cámara catcher (detrás del plato → pitcher) y aspecto calibrado.
+
+    Eje-y natural: plato (y≈1.4) cerca, pitcher (y≈60) lejos. La cámara se coloca DETRÁS
+    del plato (y negativo) y baja (nivel de ojos del cátcher), mirando hacia el pitcher (+y).
+    """
     ax = dict(visible=False, showgrid=False, zeroline=False,
               showbackground=False, showticklabels=False)
     return dict(
         title=dict(text=title, font=dict(color="#12324a", size=15), x=0.03),
-        height=640, margin=dict(l=0, r=0, t=44, b=0), paper_bgcolor=BG, showlegend=False,
+        height=660, margin=dict(l=0, r=0, t=44, b=0), paper_bgcolor=BG, showlegend=False,
         scene=dict(
             bgcolor=BG,
             xaxis={**ax, "range": [-6, 6]},
-            yaxis={**ax, "range": [66, -2.5]},   # reversed: release atrás, plato adelante
-            zaxis={**ax, "range": [-0.1, 11]},
-            aspectmode="manual", aspectratio=dict(x=1, y=2.2, z=0.9),
-            camera=dict(eye=dict(x=0.0, y=-1.95, z=0.42),
-                        center=dict(x=0, y=-0.20, z=-0.05),
-                        up=dict(x=0, y=0, z=1))))
+            yaxis={**ax, "range": [-3, 56]},      # natural: plato cerca, pitcher lejos
+            zaxis={**ax, "range": [0, 11]},
+            aspectmode="manual", aspectratio=dict(x=1.0, y=2.0, z=0.6),
+            camera=dict(eye=dict(x=0.0, y=-1.62, z=0.20),   # detrás y algo arriba del plato
+                        center=dict(x=0.0, y=0.42, z=0.02),  # mira hacia el pitcher, zona centrada
+                        up=dict(x=0, y=0, z=1),
+                        projection=dict(type="perspective"))))
 
 
 def pitch_ribbon_traces(path, color, label=""):
     """Cinta glossy por capas (glow + cuerpo + núcleo brillante) sobre los puntos reales."""
     xs = [p[0] for p in path]; ys = [p[1] for p in path]; zs = [p[2] for p in path]
-    body = go.Scatter3d(x=xs, y=ys, z=zs, mode="lines", line=dict(color=color, width=9),
+    body = go.Scatter3d(x=xs, y=ys, z=zs, mode="lines", line=dict(color=color, width=12),
                         opacity=0.98, name=label)
     if label:
         body.update(hovertemplate=label + "<extra></extra>")
     else:
         body.update(hoverinfo="skip", showlegend=False)
     return [
-        go.Scatter3d(x=xs, y=ys, z=zs, mode="lines", line=dict(color=color, width=20),
+        go.Scatter3d(x=xs, y=ys, z=zs, mode="lines", line=dict(color=color, width=24),
                      opacity=0.16, showlegend=False, hoverinfo="skip"),
         body,
-        go.Scatter3d(x=xs, y=ys, z=zs, mode="lines", line=dict(color=_lighten(color), width=3),
+        go.Scatter3d(x=xs, y=ys, z=zs, mode="lines", line=dict(color=_lighten(color), width=4),
                      opacity=0.9, showlegend=False, hoverinfo="skip"),
     ]
 
@@ -233,4 +240,10 @@ def pitches_thrown_figure(rows, title=""):
                                    col, label=label)
     fig = go.Figure(data=data)
     fig.update_layout(**catcher_scene_layout(title or "Pitches Thrown"))
+    # sin trayectorias hacia el release: recortar el campo lejano y centrar la cámara en la zona
+    fig.update_scenes(yaxis_range=[-3, 20], aspectratio=dict(x=1.0, y=1.05, z=0.72),
+                      camera=dict(eye=dict(x=0.0, y=-1.7, z=0.42),
+                                  center=dict(x=0.0, y=-0.05, z=-0.02),
+                                  up=dict(x=0, y=0, z=1),
+                                  projection=dict(type="perspective")))
     return fig
