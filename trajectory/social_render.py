@@ -303,6 +303,36 @@ def _header(ax, title, sub):
             path_effects=[matplotlib.patheffects.withStroke(linewidth=2.5, foreground="#00000066")])
 
 
+def _draw_side_panel(ax, title, entries, active_idx=None):
+    """Panel lateral persistente estilo broadcast PITCH ARSENAL (rojo), con el pitcheo
+    activo resaltado. entries: [(color, label, velo_str)]."""
+    n = len(entries)
+    row_h = min(0.088, 0.60 / max(n, 1))
+    px0, pw = 0.022, 0.30
+    py1 = 0.955
+    ph = 0.10 + n * row_h
+    py0 = py1 - ph
+    ax.add_patch(FancyBboxPatch((px0, py0), pw, ph, transform=ax.transAxes,
+                 boxstyle="round,pad=0.006", facecolor="#8e0e24f0",
+                 edgecolor="#ffffff2e", lw=1.2, zorder=30))
+    ax.text(px0 + 0.018, py1 - 0.028, title, transform=ax.transAxes, fontsize=15,
+            fontweight="bold", color="#ffffff", va="top", zorder=31)
+    ax.text(px0 + 0.018, py1 - 0.072, "PITCH ARSENAL", transform=ax.transAxes,
+            fontsize=8, color="#ffffffcc", va="top", zorder=31)
+    for i, (col, lbl, velo) in enumerate(entries):
+        y = py1 - 0.108 - i * row_h - row_h * 0.5
+        if active_idx == i:
+            ax.add_patch(Rectangle((px0 + 0.006, y - row_h * 0.44), pw - 0.012, row_h * 0.88,
+                         transform=ax.transAxes, facecolor="#ffffff26",
+                         edgecolor="none", zorder=30.5))
+        ax.add_patch(Circle((px0 + 0.03, y), 0.0115, transform=ax.transAxes,
+                     facecolor="#ffffff", edgecolor=col, lw=3.2, zorder=31))
+        ax.text(px0 + 0.058, y, str(lbl).upper(), transform=ax.transAxes, fontsize=10.5,
+                fontweight="bold", color="#ffffff", va="center", zorder=31)
+        ax.text(px0 + pw - 0.018, y, velo, transform=ax.transAxes, fontsize=9.5,
+                color="#ffffffe0", va="center", ha="right", zorder=31)
+
+
 def render_social_gif(rows: pd.DataFrame, pitcher: str = "", fps: int = 30,
                       travel_frames: int = 30, hold_frames: int = 10,
                       endcard_frames: int = 36, use_average: bool = True,
@@ -338,8 +368,9 @@ def render_social_gif(rows: pd.DataFrame, pitcher: str = "", fps: int = 30,
     frames = []      # [(PIL.Image, duración_ms)] — frames únicos con duración propia
     FRAME_MS = int(1000/fps)
 
+    entries = [(p["color"], p["label"], _fmt(p["row"].get("RelSpeed"), " mph")) for p in pitches]
     landed = []   # [(u,v,color,texto)]
-    for p in pitches:
+    for pi, p in enumerate(pitches):
         row, path, met = p["row"], p["path"], p["metrics"]
         spin = float(row.get("SpinRate") or 2200.0)
         axis = float(row.get("SpinAxis") or 200.0) - 180.0
@@ -353,7 +384,7 @@ def render_social_gif(rows: pd.DataFrame, pitcher: str = "", fps: int = 30,
         prev_uv = None
         for k in range(travel_frames):
             fig, ax = _new_canvas(bg)
-            _header(ax, title, sub)
+            _draw_side_panel(ax, title, entries, active_idx=pi)
             # marcadores de pitches anteriores
             for (lu, lv, lc, _txt) in landed:
                 ax.add_patch(Circle((lu, lv), 0.14, fill=False,
@@ -394,41 +425,15 @@ def render_social_gif(rows: pd.DataFrame, pitcher: str = "", fps: int = 30,
                           facecolor=p["color"], edgecolor="none", alpha=0.93))
         frames.append((_fig_to_pil(fig), hold_frames*FRAME_MS))
 
-    # ── tarjeta final de métricas ────────────────────────────────────────
+    # ── frame final: todos los pitcheos aterrizados, con el panel al lado ──
     fig, ax = _new_canvas(bg)
+    _draw_side_panel(ax, title, entries, active_idx=None)
     for (lu, lv, lc, _txt) in landed:
         ax.add_patch(Circle((lu, lv), 0.14, fill=False,
-                            edgecolor=lc, lw=2.4, alpha=0.8, zorder=7))
-    ax.add_patch(FancyBboxPatch((0.06, 0.08), 0.88, 0.84,
-                 transform=ax.transAxes, boxstyle="round,pad=0.015",
-                 facecolor="#0d1b2acc", edgecolor="#ffffff33", lw=1.5, zorder=20))
-    ax.text(0.5, 0.86, title, transform=ax.transAxes, ha="center",
-            fontsize=22, fontweight="bold", color="#ffffff", zorder=21)
-    subtitle_card = ("PROMEDIO POR TIPO DE LANZAMIENTO" if use_average
-                     else "RESUMEN DE LANZAMIENTOS")
-    ax.text(0.5, 0.815, subtitle_card, transform=ax.transAxes,
-            ha="center", fontsize=11, color="#8ea8c3", zorder=21)
-    n = len(pitches)
-    row_h = min(0.145, 0.62/n)
-    for i, p in enumerate(pitches):
-        r, met = p["row"], p["metrics"]
-        y0 = 0.75 - i*row_h
-        ax.add_patch(Circle((0.115, y0-0.012), 0.016, transform=ax.transAxes,
-                            color=p["color"], zorder=22))
-        ax.text(0.15, y0, f"{p['label']}  ·  {_fmt(r.get('RelSpeed'),' mph')}  ·  "
-                f"{_fmt(r.get('SpinRate'),' rpm',0)}",
-                transform=ax.transAxes, fontsize=14.5, fontweight="bold",
-                color="#ffffff", va="center", zorder=22)
-        ivb = r.get("InducedVertBreak", r.get("VertBreak"))
-        inch = '"'
-        det = (f"HB {_fmt(r.get('HorzBreak'), inch)}  ·  IVB {_fmt(ivb, inch)}  ·  "
-               f"VAA {_fmt(met.get('vaa_deg'),'°')}  ·  "
-               f"{_result_text(r)}")
-        ax.text(0.15, y0-0.042, det, transform=ax.transAxes, fontsize=11,
-                color="#b9cbdd", va="center", zorder=22)
-    ax.text(0.5, 0.115, "Generado con Trackman Analytics", transform=ax.transAxes,
-            ha="center", fontsize=9.5, color="#8ea8c3", alpha=0.8, zorder=21)
-    frames.append((_fig_to_pil(fig), endcard_frames*FRAME_MS + 1500))
+                            edgecolor=lc, lw=2.6, alpha=0.95, zorder=7))
+    ax.text(0.985, 0.02, "Generado con Trackman Analytics", transform=ax.transAxes,
+            ha="right", fontsize=9.5, color="#ffffffb0", zorder=21)
+    frames.append((_fig_to_pil(fig), endcard_frames*FRAME_MS + 800))
 
     out = io.BytesIO()
     imgs = [f.quantize(colors=220, method=Image.MEDIANCUT) for f, _ in frames]
