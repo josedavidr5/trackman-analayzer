@@ -20,8 +20,12 @@ def pt_color(pt, idx=0):
 
 
 ZONE_X, ZONE_LO, ZONE_HI = 0.83, 1.5, 3.5
-GRASS, DIRT = "#4a7c3f", "#b06a43"
-SKY_LO, SKY_HI, BG = "#f3d9c0", "#9cc3e0", "#bcd7ea"
+# Paleta nocturna (partido de noche, look broadcast oscuro)
+GRASS_FRONT, GRASS_BACK = "#1f3d23", "#0e1c12"   # césped iluminado adelante → oscuro al fondo
+DIRT_FRONT, DIRT_BACK = "#4d3222", "#33210f"
+SKY_HORIZON, SKY_TOP = "#17223a", "#070a12"      # leve glow en el horizonte → cielo negro
+BG = "#070a10"                                    # fondo casi negro
+INK = "#dbe7f2"
 
 
 def _rgb(h):
@@ -38,25 +42,32 @@ def _lighten(hexc, f=0.55):
 def field_scene_traces():
     """Escena diurna híbrida: cielo degradado, césped, tierra, zona 3×3, plato, foul, goma."""
     t = []
-    # cielo: quad vertical lejano con degradado vertexcolor (horizonte→cenit), ancho para
-    # que llene el fondo detrás del campo
-    lo, hi = _rgb(SKY_LO), _rgb(SKY_HI)
+    # cielo nocturno: leve glow en el horizonte → negro arriba
+    sh, stp = _rgb(SKY_HORIZON), _rgb(SKY_TOP)
     t.append(go.Mesh3d(
-        x=[-75, 75, 75, -75], y=[58.4, 58.4, 58.4, 58.4], z=[0, 0, 17, 17],
-        i=[0, 0], j=[1, 2], k=[2, 3],
-        vertexcolor=[lo, lo, hi, hi],
+        x=[-90, 90, 90, -90], y=[58.4, 58.4, 58.4, 58.4], z=[0, 0, 22, 22],
+        i=[0, 0], j=[1, 2], k=[2, 3], vertexcolor=[sh, sh, stp, stp],
         hoverinfo="skip", showscale=False, lighting=dict(ambient=1.0, diffuse=0.0)))
-    # césped (ancho de borde a borde para que no flote)
+    # césped con degradado (iluminado adelante → oscuro al fondo) para dar profundidad
+    gf, gb = _rgb(GRASS_FRONT), _rgb(GRASS_BACK)
     t.append(go.Mesh3d(
         x=[-62, 62, 62, -62], y=[-3, -3, 58, 58], z=[0, 0, 0, 0], i=[0, 0], j=[1, 2], k=[2, 3],
-        color=GRASS, hoverinfo="skip", showscale=False,
-        lighting=dict(ambient=0.8, diffuse=0.45, specular=0.1),
-        lightposition=dict(x=0, y=-30, z=60)))
-    # tierra del home (círculo/área del plato) + montículo
+        vertexcolor=[gf, gf, gb, gb], hoverinfo="skip", showscale=False,
+        lighting=dict(ambient=0.92, diffuse=0.3, specular=0.05),
+        lightposition=dict(x=0, y=-40, z=80)))
+    # franjas de corte (mowing stripes) sutiles → look de field real
+    for xb in range(-6, 6, 2):
+        t.append(go.Mesh3d(
+            x=[xb * 10, (xb + 1) * 10, (xb + 1) * 10, xb * 10], y=[-3, -3, 58, 58], z=[0.004] * 4,
+            i=[0, 0], j=[1, 2], k=[2, 3], color="#284d2c", opacity=0.4,
+            hoverinfo="skip", showscale=False))
+    # tierra del home con degradado + montículo
+    dfr, dbk = _rgb(DIRT_FRONT), _rgb(DIRT_BACK)
     t.append(go.Mesh3d(x=[-11, 11, 11, -11], y=[-3, -3, 12, 12], z=[0.01] * 4,
-        i=[0, 0], j=[1, 2], k=[2, 3], color=DIRT, hoverinfo="skip", showscale=False))
+        i=[0, 0], j=[1, 2], k=[2, 3], vertexcolor=[dfr, dfr, dbk, dbk],
+        hoverinfo="skip", showscale=False))
     t.append(go.Mesh3d(x=[-6, 6, 6, -6], y=[54, 54, 64, 64], z=[0.01] * 4,
-        i=[0, 0], j=[1, 2], k=[2, 3], color=DIRT, opacity=0.92, hoverinfo="skip", showscale=False))
+        i=[0, 0], j=[1, 2], k=[2, 3], color=DIRT_BACK, opacity=0.9, hoverinfo="skip", showscale=False))
     # zona 3×3: panel + marco + grid
     y = PLATE_Y
     t.append(go.Mesh3d(x=[-ZONE_X, ZONE_X, ZONE_X, -ZONE_X], y=[y] * 4,
@@ -94,7 +105,7 @@ def catcher_scene_layout(title=""):
     ax = dict(visible=False, showgrid=False, zeroline=False,
               showbackground=False, showticklabels=False)
     return dict(
-        title=dict(text=title, font=dict(color="#12324a", size=15), x=0.03),
+        title=dict(text=title, font=dict(color=INK, size=15), x=0.03),
         height=660, margin=dict(l=0, r=0, t=44, b=0), paper_bgcolor=BG, showlegend=False,
         scene=dict(
             bgcolor=BG,
@@ -140,8 +151,8 @@ def ball_marker_traces(x, y, z, color, label="", core="#ffffff", opacity=1.0):
         corem.update(hoverinfo="skip")
     out = [halo, corem]
     if label:
-        out.append(go.Scatter3d(x=[x], y=[y], z=[z + 0.5], mode="text", text=[label],
-                                textfont=dict(color="#12324a", size=11),
+        out.append(go.Scatter3d(x=[x], y=[y], z=[z + 0.55], mode="text", text=[f"<b>{label}</b>"],
+                                textfont=dict(color="#f2f7fb", size=12),
                                 showlegend=False, hoverinfo="skip"))
     return out
 
@@ -228,7 +239,7 @@ def pitches_thrown_figure(rows, title=""):
         fig = go.Figure(data=field_scene_traces())
         fig.update_layout(**catcher_scene_layout(title or "Pitches Thrown"))
         fig.add_annotation(text="Sin datos de ubicación", showarrow=False,
-                           font=dict(color="#12324a", size=14))
+                           font=dict(color=INK, size=14))
         return fig
     loc = rows.dropna(subset=["PlateLocSide", "PlateLocHeight"])
     data = list(field_scene_traces())

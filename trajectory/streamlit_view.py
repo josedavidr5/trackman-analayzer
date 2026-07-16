@@ -341,52 +341,54 @@ def render_trajectory_mode(df, lmeta):
         sel = _pick_pitches_ui(pdf, "tj_pick")
         sub_view = st.radio("Vista 3D", ["🎥 Animación", "🎯 Pitches Thrown"],
                             key="tj_subview", horizontal=True)
-        if sub_view == "🎯 Pitches Thrown":
-            st.plotly_chart(scene3d.pitches_thrown_figure(
-                pdf, title=f"{pitcher} · PITCHES THROWN"), use_container_width=True)
-        elif sel.empty:
-            st.info("Selecciona al menos un pitch.")
-        else:
-            fig, metas = scene3d.build_pitch_animation(sel, n_points=n_pts,
-                                         title=f"{pitcher} · PITCH TRAJECTORIES")
-            if fig is None:
-                st.warning("No se pudo reconstruir ninguna trayectoria (datos faltantes).")
+        # panel de info del lanzamiento (arsenal) — siempre a la izquierda de la escena 3D
+        ars = []
+        for i, (pt, g) in enumerate(pdf.groupby("TaggedPitchType")):
+            v = (f'{g["RelSpeed"].mean():.1f} mph'
+                 if "RelSpeed" in g.columns and g["RelSpeed"].notna().any() else "—")
+            ars.append((scene3d.pt_color(pt, i), str(pt), len(g), v))
+        ars.sort(key=lambda r: -r[2])
+        col_panel, col_fig = st.columns([1, 3.4])
+        with col_panel:
+            st.markdown(arsenal_panel_html(pitcher, ars), unsafe_allow_html=True)
+        fig, metas = None, []
+        with col_fig:
+            if sub_view == "🎯 Pitches Thrown":
+                st.plotly_chart(scene3d.pitches_thrown_figure(
+                    pdf, title=f"{pitcher} · PITCHES THROWN"), use_container_width=True)
+            elif sel.empty:
+                st.info("Selecciona al menos un pitch.")
             else:
-                col_panel, col_fig = st.columns([1, 3.4])
-                with col_panel:
-                    # panel de arsenal estilo broadcast (conteos del dataset filtrado)
-                    ars=[]
-                    for i,(pt,g) in enumerate(pdf.groupby("TaggedPitchType")):
-                        v=(f'{g["RelSpeed"].mean():.1f} mph'
-                           if "RelSpeed" in g.columns and g["RelSpeed"].notna().any() else "—")
-                        ars.append((_pt_color(pt,i), str(pt), len(g), v))
-                    ars.sort(key=lambda r: -r[2])
-                    st.markdown(arsenal_panel_html(pitcher, ars), unsafe_allow_html=True)
-                with col_fig:
+                fig, metas = scene3d.build_pitch_animation(sel, n_points=n_pts,
+                                             title=f"{pitcher} · PITCH TRAJECTORIES")
+                if fig is None:
+                    st.warning("No se pudo reconstruir ninguna trayectoria (datos faltantes).")
+                else:
                     st.plotly_chart(fig, use_container_width=True)
-                if metas:
-                    mdf = pd.DataFrame(metas)
-                    mdf.insert(0, "Pitch", [_pitch_label(r) for _, r in sel.iterrows()][:len(mdf)])
-                    st.dataframe(mdf, use_container_width=True, hide_index=True)
-                e1, e2 = st.columns(2)
-                with e1:
-                    st.download_button("⬇️ Exportar HTML interactivo",
-                        fig.to_html(include_plotlyjs="cdn").encode(),
-                        f"{pitcher}_trayectorias.html", "text/html")
-                with e2:
-                    if st.button("🎞️ Generar GIF slow-mo (redes)", key="tj_gif",
-                                 help="Anima el lanzamiento PROMEDIO de cada tipo de "
-                                      "pitcheo (con los filtros actuales) sobre campo "
-                                      "real, con spin realista — 900×900 para redes"):
-                        from .social_render import render_social_gif
-                        with st.spinner("Renderizando GIF cinematográfico… (~20s)"):
-                            gif = render_social_gif(pdf, pitcher=pitcher)
-                        if gif:
-                            st.image(gif)
-                            st.download_button("⬇️ Descargar GIF", gif,
-                                f"{pitcher}_slowmo.gif", "image/gif", key="tj_gif_dl")
-                        else:
-                            st.warning("Datos insuficientes para el GIF.")
+        if fig is not None:
+            if metas:
+                mdf = pd.DataFrame(metas)
+                mdf.insert(0, "Pitch", [_pitch_label(r) for _, r in sel.iterrows()][:len(mdf)])
+                st.dataframe(mdf, use_container_width=True, hide_index=True)
+            e1, e2 = st.columns(2)
+            with e1:
+                st.download_button("⬇️ Exportar HTML interactivo",
+                    fig.to_html(include_plotlyjs="cdn").encode(),
+                    f"{pitcher}_trayectorias.html", "text/html")
+            with e2:
+                if st.button("🎞️ Generar GIF slow-mo (redes)", key="tj_gif",
+                             help="Anima el lanzamiento PROMEDIO de cada tipo de "
+                                  "pitcheo (con los filtros actuales) sobre campo "
+                                  "real, con spin realista — 900×900 para redes"):
+                    from .social_render import render_social_gif
+                    with st.spinner("Renderizando GIF cinematográfico… (~20s)"):
+                        gif = render_social_gif(pdf, pitcher=pitcher)
+                    if gif:
+                        st.image(gif)
+                        st.download_button("⬇️ Descargar GIF", gif,
+                            f"{pitcher}_slowmo.gif", "image/gif", key="tj_gif_dl")
+                    else:
+                        st.warning("Datos insuficientes para el GIF.")
 
     # ── 🆚 Comparar pitchers ───────────────────────────────────────────────
     with tabs[1]:
