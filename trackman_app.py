@@ -52,6 +52,9 @@ from core.pitching import (build_usage_by_count, arsenal_stuff, movement_points,
                            whiff_csw_zone_grid)
 from core.pitching import pitch_summary as build_pitch_summary
 from core.pitching import pitch_discipline as compute_pitch_discipline
+from core.hitting import (build_play_result_table, compute_plate_discipline_batter,
+                          build_split_table, build_hitting_monthly,
+                          spray_points, hitting_summary)
 from viz import pitching as vpitch
 
 warnings.filterwarnings("ignore")
@@ -770,92 +773,6 @@ def player_search_select(all_players, label, key):
 # ══════════════════════════════════════════════════════════════════════════════
 # ANALYTICS BUILDERS
 # ══════════════════════════════════════════════════════════════════════════════
-def build_play_result_table(df):
-    if "PlayResult" not in df.columns: return pd.DataFrame()
-    counts=df["PlayResult"].value_counts().reset_index()
-    counts.columns=["Result","Count"]
-    counts=counts[counts["Result"]!="—"]
-    pa=max(count_pa(df),1)                      # v4.2: real PA denominator
-    counts["% of PAs"]=counts["Count"].apply(lambda x:safe_pct(x,pa))
-    return counts.reset_index(drop=True)
-
-def compute_plate_discipline_batter(df):
-    """
-    Batter plate discipline (v4.2 fixes):
-      • Zone % / Chase % from true pitch location when available
-      • K % and BB % per PLATE APPEARANCE (not per pitch)
-      • BB counted from PlayResult (a called ball is NOT a walk)
-    """
-    if "PitchCall" not in df.columns: return {}
-    pc=df["PitchCall"].astype(str)
-    ZONE_CALLS={"StrikeCalled","StrikeSwinging","FoulBall","FoulBallFieldable","FoulBallNotFieldable","InPlay"}
-    n=len(df)
-    sw_m=pc.isin(SWING_CALLS); ct_m=pc.isin(CONTACT_CALLS)
-    sw,cont,whiff=int(sw_m.sum()),int(ct_m.sum()),int(pc.eq("StrikeSwinging").sum())
-    zone_m,has_loc=in_zone_mask(df)
-    if has_loc:
-        located=df["PlateLocSide"].notna()&df["PlateLocHeight"].notna()
-        in_z=int(zone_m.sum()); n_loc=int(located.sum())
-        oz=located&~zone_m
-        zone_pct=safe_pct(in_z,n_loc)
-        chase_pct=safe_pct(int((sw_m&oz).sum()),max(int(oz.sum()),1))
-    else:
-        in_z=int(pc.isin(ZONE_CALLS).sum())
-        zone_pct=safe_pct(in_z,n)
-        chase_pct=safe_pct(max(0,sw-cont),max(n-in_z,1))
-    pa=count_pa(df)
-    kk,bb=count_k_bb(df)
-    return {"Zone %":zone_pct, "Swing %":safe_pct(sw,n),
-            "Contact %":safe_pct(cont,max(sw,1)),
-            "Chase %":chase_pct,
-            "Whiff %":safe_pct(whiff,max(sw,1)),
-            "K %":safe_pct(kk,max(pa,1)), "BB %":safe_pct(bb,max(pa,1))}
-
-def build_split_table(df, split_col="PitcherThrows", ev_hard=95):
-    if split_col not in df.columns: return pd.DataFrame()
-    rows=[]
-    for hand,grp in df.groupby(split_col):
-        n=len(grp); r={"vs":hand,"Pitches":n,"PA":count_pa(grp)}
-        if "ExitSpeed" in grp.columns:
-            ev=grp["ExitSpeed"].dropna()
-            r["Avg EV"]=round(ev.mean(),1) if not ev.empty else np.nan
-            r["HH %"]=safe_pct((ev>=ev_hard).sum(),len(ev))
-        if "Angle" in grp.columns:
-            la=grp["Angle"].dropna()
-            r["Avg LA"]=round(la.mean(),1) if not la.empty else np.nan
-        disc=compute_plate_discipline_batter(grp)
-        r.update({k:v for k,v in disc.items()})
-        r["wOBA"]=compute_woba(grp)
-        rows.append(r)
-    return pd.DataFrame(rows).reset_index(drop=True)
-
-def build_hitting_monthly(df, lmeta=None):
-    ev_hard=(lmeta or {}).get("ev_hard",95)
-    barrel_base=(lmeta or {}).get("barrel_ev",98)
-    df=df.copy(); df["YearMonth"]=df["Date"].dt.to_period("M")
-    rows=[]
-    for period,grp in df.groupby("YearMonth"):
-        r={"Month":str(period),"Pitches":len(grp),"PA":count_pa(grp)}
-        for col,(mx,av) in [("ExitSpeed",("Max EV","Avg EV")),("Angle",("Max LA","Avg LA")),("Distance",("Max Dist","Avg Dist"))]:
-            if col in df.columns:
-                vals=grp[col].dropna()
-                r[mx]=round(vals.max(),1) if not vals.empty else np.nan
-                r[av]=round(vals.mean(),1) if not vals.empty else np.nan
-        bip=batted_ball_mask(grp)                     # v4.2: batted-ball denominator
-        n_bip=int(bip.sum())
-        if "ExitSpeed" in df.columns:
-            ev=grp.loc[bip,"ExitSpeed"].dropna()
-            r["HH %"]=safe_pct(int((ev>=ev_hard).sum()),max(len(ev),1))
-        if "ExitSpeed" in df.columns and "Angle" in df.columns:
-            barrels=int(barrel_mask(grp[bip],barrel_base).sum()) if n_bip else 0
-            r["Barrel %"]=safe_pct(barrels,max(n_bip,1))
-        kk,bb=count_k_bb(grp); pa=max(count_pa(grp),1)
-        r["K %"]=safe_pct(kk,pa); r["BB %"]=safe_pct(bb,pa)
-        r["wOBA"]=compute_woba(grp)
-        rows.append(r)
-    out=pd.DataFrame(rows)
-    return out.sort_values("Month",ascending=False).reset_index(drop=True) if not out.empty else out
-
 def build_league_pitching_avg(df):
     rows=[]
     for pt,grp in df.groupby("TaggedPitchType"):
