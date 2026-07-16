@@ -17,8 +17,7 @@ from .engine import compute_pitch_path, pitch_metrics, PLATE_Y
 from .validation import validate_schema, validate_physical
 from .analytics import (ensure_pitch_ids, movement_profile,
                         release_consistency, velocity_spin_trends)
-from . import scene3d
-from .social_render import render_trajectories_png
+from .social_render import render_trajectories_png, render_pitches_thrown_png
 
 PALETTE = ["#1f77b4","#d62728","#2ca02c","#ff7f0e","#9467bd",
            "#8c564b","#e377c2","#7f7f7f","#17becf","#bcbd22"]
@@ -341,29 +340,22 @@ def render_trajectory_mode(df, lmeta):
         sel = _pick_pitches_ui(pdf, "tj_pick")
         sub_view = st.radio("Vista 3D", ["🎥 Animación", "🎯 Pitches Thrown"],
                             key="tj_subview", horizontal=True)
-        # panel de info del lanzamiento (arsenal) — siempre a la izquierda de la escena 3D
-        ars = []
-        for i, (pt, g) in enumerate(pdf.groupby("TaggedPitchType")):
-            v = (f'{g["RelSpeed"].mean():.1f} mph'
-                 if "RelSpeed" in g.columns and g["RelSpeed"].notna().any() else "—")
-            ars.append((scene3d.pt_color(pt, i), str(pt), len(g), v))
-        ars.sort(key=lambda r: -r[2])
-        col_panel, col_fig = st.columns([1, 3.4])
-        with col_panel:
-            st.markdown(arsenal_panel_html(pitcher, ars), unsafe_allow_html=True)
+        # El panel PITCH ARSENAL va dibujado dentro del render (a la izquierda de la escena).
         anim_png, metas = None, []
-        with col_fig:
-            if sub_view == "🎯 Pitches Thrown":
-                st.plotly_chart(scene3d.pitches_thrown_figure(
-                    pdf, title=f"{pitcher} · PITCHES THROWN"), use_container_width=True)
-            elif sel.empty:
-                st.info("Selecciona al menos un pitch.")
+        if sub_view == "🎯 Pitches Thrown":
+            thrown_png, _n = render_pitches_thrown_png(pdf, pitcher=pitcher, night=True)
+            if thrown_png is None:
+                st.info("Sin datos de ubicación para Pitches Thrown.")
             else:
-                anim_png, metas = render_trajectories_png(sel, pitcher=pitcher, night=True)
-                if anim_png is None:
-                    st.warning("No se pudo reconstruir ninguna trayectoria (datos faltantes).")
-                else:
-                    st.image(anim_png, use_container_width=True)
+                st.image(thrown_png, use_container_width=True)
+        elif sel.empty:
+            st.info("Selecciona al menos un pitch.")
+        else:
+            anim_png, metas = render_trajectories_png(sel, pitcher=pitcher, night=True)
+            if anim_png is None:
+                st.warning("No se pudo reconstruir ninguna trayectoria (datos faltantes).")
+            else:
+                st.image(anim_png, use_container_width=True)
         if anim_png is not None:
             if metas:
                 mdf = pd.DataFrame(metas)

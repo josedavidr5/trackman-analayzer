@@ -34,8 +34,8 @@ ZONE_X, ZONE_LO, ZONE_HI = 0.83, 1.5, 3.5
 
 PALETTE = ["#1f77b4","#d62728","#2ca02c","#ff7f0e","#9467bd","#8c564b"]
 STATCAST_COLORS={
-    "4-Seam":"#D22D49","Fastball":"#D22D49","Four-Seam Fastball":"#D22D49",
-    "2-Seam":"#DE6A04","Sinker":"#FE9D00","Cutter":"#933F2C","Slider":"#C3BD0E",
+    "4-Seam":"#D22D49","Fastball":"#D22D49","Four-Seam Fastball":"#D22D49","Four-Seam":"#D22D49",
+    "2-Seam":"#DE6A04","Two-Seam":"#DE6A04","Sinker":"#FE9D00","Cutter":"#933F2C","Slider":"#C3BD0E",
     "Sweeper":"#DDB33A","Curve":"#00D1ED","Curveball":"#00D1ED",
     "Change":"#1DBE3A","Changeup":"#1DBE3A","Split":"#3BACAC",
     "Knuckleball":"#3C44CD","Screwball":"#60DB33",
@@ -254,22 +254,52 @@ def _fig_png_bytes(fig):
     return buf.getvalue()
 
 
+def _type_color_map(rows):
+    """{tipo: color} y el orden de tipos por frecuencia — colores consistentes entre panel y balls."""
+    from collections import Counter
+    if "TaggedPitchType" not in rows.columns:
+        return {}, []
+    types = rows["TaggedPitchType"].astype(str)
+    order = [t for t, _ in Counter(types).most_common()]
+    return {t: _pt_color(t, i) for i, t in enumerate(order)}, order
+
+
+def _panel_entries(rows, cmap, order):
+    """Entradas del panel PITCH ARSENAL por tipo: (color, TIPO, velo, 'rpm · IVB · HB')."""
+    inch = '"'
+    types = rows["TaggedPitchType"].astype(str) if "TaggedPitchType" in rows.columns else None
+    out = []
+    for t in order:
+        g = rows[types == t]
+        velo = (_fmt(g["RelSpeed"].mean(), " mph")
+                if "RelSpeed" in g.columns and g["RelSpeed"].notna().any() else "—")
+        ivbcol = ("InducedVertBreak" if "InducedVertBreak" in g.columns
+                  else ("VertBreak" if "VertBreak" in g.columns else None))
+        ivb = g[ivbcol].mean() if ivbcol else None
+        hb = g["HorzBreak"].mean() if "HorzBreak" in g.columns else None
+        spin = g["SpinRate"].mean() if "SpinRate" in g.columns else None
+        det = f"{_fmt(spin, ' rpm', 0)} · IVB {_fmt(ivb, inch)} · HB {_fmt(hb, inch)}"
+        out.append((cmap.get(t, "#cccccc"), t, velo, det))
+    return out
+
+
 def render_trajectories_png(rows: pd.DataFrame, pitcher: str = "", night: bool = True):
     """Render estático realista (matplotlib) de TODAS las trayectorias sobre el campo en
-    perspectiva (catcher view). Cada pitcheo = cinta de color con glow + pelota con anillo al
-    cruzar el plato. Devuelve (png_bytes, [metrics...]) o (None, []) si no hay trayectorias."""
+    perspectiva (catcher view), con panel PITCH ARSENAL fijo a la izquierda. Cada pitcheo = cinta
+    de color con glow + pelota con anillo al cruzar el plato. Devuelve (png_bytes, [metrics...])."""
+    cmap, order = _type_color_map(rows)
     items = []
-    for i, (_, r) in enumerate(rows.iterrows()):
+    for _, r in rows.iterrows():
         try:
             p = compute_pitch_path(r, n_points=46)
         except ValueError:
             continue
-        items.append((p, _pt_color(r.get("TaggedPitchType"), i), pitch_metrics(r)))
+        items.append((p, cmap.get(str(r.get("TaggedPitchType")), "#cccccc"), pitch_metrics(r)))
     if not items:
         return None, []
     fig, ax = _new_canvas()
     _draw_field(ax, night=night)
-    _header(ax, (pitcher.strip() or "TRACKMAN"), "PITCH TRAJECTORIES · vista del catcher")
+    _draw_side_panel(ax, (pitcher.strip() or "TRACKMAN"), _panel_entries(rows, cmap, order))
     for p, col, _m in items:
         us = [_proj(x, y, z)[0] for (x, y, z, _t) in p]
         vs = [_proj(x, y, z)[1] for (x, y, z, _t) in p]
@@ -281,6 +311,38 @@ def render_trajectories_png(rows: pd.DataFrame, pitcher: str = "", night: bool =
         ax.add_patch(Circle((uf, vf), _ball_r(yf) * 1.7, fill=False,
                             edgecolor=col, lw=2.6, zorder=13))
     return _fig_png_bytes(fig), [it[2] for it in items]
+
+
+_TERMINAL_RESULTS = {"1B", "2B", "3B", "HR", "Out", "K", "BB", "HBP", "FC",
+                     "Error", "SacFly", "SacBunt"}
+
+
+def render_pitches_thrown_png(rows: pd.DataFrame, pitcher: str = "", night: bool = True):
+    """Vista estática realista (matplotlib) de las pelotas ubicadas en la zona (catcher view):
+    cada pitcheo como pelota real con anillo de color por tipo y etiqueta de resultado, sobre el
+    mismo campo (día/noche) que la animación. Panel lateral fijo. Devuelve (png_bytes, n)."""
+    if not {"PlateLocSide", "PlateLocHeight"}.issubset(rows.columns):
+        return None, 0
+    loc = rows.dropna(subset=["PlateLocSide", "PlateLocHeight"]).copy()
+    if loc.empty:
+        return None, 0
+    cmap, order = _type_color_map(loc)
+    fig, ax = _new_canvas()
+    _draw_field(ax, night=night)
+    _draw_side_panel(ax, (pitcher.strip() or "TRACKMAN"), _panel_entries(loc, cmap, order))
+    rb = _ball_r(1.417)
+    for _, r in loc.iterrows():
+        col = cmap.get(str(r.get("TaggedPitchType")), "#cccccc")
+        u, v = _proj(float(r["PlateLocSide"]), 1.417, float(r["PlateLocHeight"]))
+        _draw_ball(ax, u, v, rb * 0.85, 0.0, 0.0)
+        ax.add_patch(Circle((u, v), rb * 1.35, fill=False, edgecolor=col, lw=2.4, zorder=13))
+        res = str(r.get("PlayResult", "")) if pd.notna(r.get("PlayResult", None)) else ""
+        if res in _TERMINAL_RESULTS:
+            ax.text(u, v + rb * 2.1, res, ha="center", fontsize=9.5, fontweight="bold",
+                    color="#ffffff", zorder=14,
+                    path_effects=[matplotlib.patheffects.withStroke(
+                        linewidth=2.2, foreground="#000000cc")])
+    return _fig_png_bytes(fig), int(len(loc))
 
 
 def _new_canvas(bg_img=None):

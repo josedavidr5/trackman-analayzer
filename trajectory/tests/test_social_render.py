@@ -26,3 +26,24 @@ def test_render_trajectories_png_day_also_works():
 def test_render_trajectories_png_empty():
     png, metas = sr.render_trajectories_png(pd.DataFrame({"TaggedPitchType": []}))
     assert png is None and metas == []
+
+
+def _thrown_rows():
+    return pd.DataFrame({
+        "TaggedPitchType": ["Fastball", "Slider", "Sinker"],
+        "PlateLocSide": [0.1, -0.4, 0.6], "PlateLocHeight": [2.6, 2.0, 3.1],
+        "RelSpeed": [94, 84, 92], "SpinRate": [2300, 2500, 2100],
+        "InducedVertBreak": [16, 2, 10], "HorzBreak": [-8, 7, -10],
+        "PlayResult": ["K", "Out", "1B"],
+    })
+
+
+def test_render_pitches_thrown_png_night_returns_bytes_and_count():
+    png, n = sr.render_pitches_thrown_png(_thrown_rows(), pitcher="P", night=True)
+    assert isinstance(png, (bytes, bytearray)) and png[:8].startswith(b"\x89PNG")
+    assert n == 3
+
+
+def test_render_pitches_thrown_png_missing_cols():
+    png, n = sr.render_pitches_thrown_png(pd.DataFrame({"TaggedPitchType": ["FB"]}))
+    assert png is None and n == 0
