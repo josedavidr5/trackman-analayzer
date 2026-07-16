@@ -17,6 +17,7 @@ from .engine import compute_pitch_path, pitch_metrics, PLATE_Y
 from .validation import validate_schema, validate_physical
 from .analytics import (ensure_pitch_ids, movement_profile,
                         release_consistency, velocity_spin_trends)
+from . import scene3d
 
 PALETTE = ["#1f77b4","#d62728","#2ca02c","#ff7f0e","#9467bd",
            "#8c564b","#e377c2","#7f7f7f","#17becf","#bcbd22"]
@@ -338,10 +339,15 @@ def render_trajectory_mode(df, lmeta):
     with tabs[0]:
         n_pts = st.slider("Puntos de interpolación", 20, 120, 50, 10, key="tj_np")
         sel = _pick_pitches_ui(pdf, "tj_pick")
-        if sel.empty:
+        sub_view = st.radio("Vista 3D", ["🎥 Animación", "🎯 Pitches Thrown"],
+                            key="tj_subview", horizontal=True)
+        if sub_view == "🎯 Pitches Thrown":
+            st.plotly_chart(scene3d.pitches_thrown_figure(
+                pdf, title=f"{pitcher} · PITCHES THROWN"), use_container_width=True)
+        elif sel.empty:
             st.info("Selecciona al menos un pitch.")
         else:
-            fig, metas = build_3d_figure(sel, n_points=n_pts,
+            fig, metas = scene3d.build_pitch_animation(sel, n_points=n_pts,
                                          title=f"{pitcher} · PITCH TRAJECTORIES")
             if fig is None:
                 st.warning("No se pudo reconstruir ninguna trayectoria (datos faltantes).")
@@ -394,7 +400,7 @@ def render_trajectory_mode(df, lmeta):
                 best = (sub.loc[sub.groupby("TaggedPitchType")["RelSpeed"].idxmax().dropna()]
                         if "RelSpeed" in sub.columns and sub["RelSpeed"].notna().any()
                         else sub.head(4))
-                figp, _ = build_3d_figure(best.head(5), n_points=40, title=p)
+                figp, _ = scene3d.build_pitch_animation(best.head(5), n_points=40, title=p)
                 if figp is not None:
                     figp.update_layout(height=480)
                     st.plotly_chart(figp, use_container_width=True)
