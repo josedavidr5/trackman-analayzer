@@ -1,8 +1,15 @@
 # Iteración 3 — Look "Statcast 3D" para el modo Trayectorias (día, catcher view)
 
 **Fecha:** 2026-07-15
-**Estado:** Diseño aprobado, pendiente de plan de implementación
+**Estado:** Implementado — dirección revisada durante la ejecución.
 **Alcance:** Modo **🎯 Trayectorias 3D** (`trajectory/`).
+
+> **Nota (pivote):** este spec planteaba el 3D en **Plotly** (`trajectory/scene3d.py`, día). Tras
+> el feedback del founder (contra el look "de juguete"), la dirección final fue un **render
+> realista de noche** con el motor matplotlib de `trajectory/social_render.py` (campo con franjas,
+> pelotas con costuras, panel PITCH ARSENAL fijo). `scene3d.py` se retiró. Ver el changelog v4.11
+> y los commits de la rama para el resultado real. El resto de este doc queda como registro del
+> plan inicial.
 
 ## Contexto y motivación
 
