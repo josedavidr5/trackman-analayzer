@@ -18,6 +18,7 @@ from .validation import validate_schema, validate_physical
 from .analytics import (ensure_pitch_ids, movement_profile,
                         release_consistency, velocity_spin_trends)
 from . import scene3d
+from .social_render import render_trajectories_png
 
 PALETTE = ["#1f77b4","#d62728","#2ca02c","#ff7f0e","#9467bd",
            "#8c564b","#e377c2","#7f7f7f","#17becf","#bcbd22"]
@@ -337,7 +338,6 @@ def render_trajectory_mode(df, lmeta):
 
     # ── 🎬 Vista 3D ────────────────────────────────────────────────────────
     with tabs[0]:
-        n_pts = st.slider("Puntos de interpolación", 20, 120, 50, 10, key="tj_np")
         sel = _pick_pitches_ui(pdf, "tj_pick")
         sub_view = st.radio("Vista 3D", ["🎥 Animación", "🎯 Pitches Thrown"],
                             key="tj_subview", horizontal=True)
@@ -351,7 +351,7 @@ def render_trajectory_mode(df, lmeta):
         col_panel, col_fig = st.columns([1, 3.4])
         with col_panel:
             st.markdown(arsenal_panel_html(pitcher, ars), unsafe_allow_html=True)
-        fig, metas = None, []
+        anim_png, metas = None, []
         with col_fig:
             if sub_view == "🎯 Pitches Thrown":
                 st.plotly_chart(scene3d.pitches_thrown_figure(
@@ -359,30 +359,28 @@ def render_trajectory_mode(df, lmeta):
             elif sel.empty:
                 st.info("Selecciona al menos un pitch.")
             else:
-                fig, metas = scene3d.build_pitch_animation(sel, n_points=n_pts,
-                                             title=f"{pitcher} · PITCH TRAJECTORIES")
-                if fig is None:
+                anim_png, metas = render_trajectories_png(sel, pitcher=pitcher, night=True)
+                if anim_png is None:
                     st.warning("No se pudo reconstruir ninguna trayectoria (datos faltantes).")
                 else:
-                    st.plotly_chart(fig, use_container_width=True)
-        if fig is not None:
+                    st.image(anim_png, use_container_width=True)
+        if anim_png is not None:
             if metas:
                 mdf = pd.DataFrame(metas)
                 mdf.insert(0, "Pitch", [_pitch_label(r) for _, r in sel.iterrows()][:len(mdf)])
                 st.dataframe(mdf, use_container_width=True, hide_index=True)
             e1, e2 = st.columns(2)
             with e1:
-                st.download_button("⬇️ Exportar HTML interactivo",
-                    fig.to_html(include_plotlyjs="cdn").encode(),
-                    f"{pitcher}_trayectorias.html", "text/html")
+                st.download_button("⬇️ Descargar PNG", anim_png,
+                    f"{pitcher}_trayectorias.png", "image/png")
             with e2:
                 if st.button("🎞️ Generar GIF slow-mo (redes)", key="tj_gif",
                              help="Anima el lanzamiento PROMEDIO de cada tipo de "
                                   "pitcheo (con los filtros actuales) sobre campo "
-                                  "real, con spin realista — 900×900 para redes"):
+                                  "real de noche, con spin realista — 900×900 para redes"):
                     from .social_render import render_social_gif
                     with st.spinner("Renderizando GIF cinematográfico… (~20s)"):
-                        gif = render_social_gif(pdf, pitcher=pitcher)
+                        gif = render_social_gif(pdf, pitcher=pitcher, night=True)
                     if gif:
                         st.image(gif)
                         st.download_button("⬇️ Descargar GIF", gif,
@@ -402,10 +400,9 @@ def render_trajectory_mode(df, lmeta):
                 best = (sub.loc[sub.groupby("TaggedPitchType")["RelSpeed"].idxmax().dropna()]
                         if "RelSpeed" in sub.columns and sub["RelSpeed"].notna().any()
                         else sub.head(4))
-                figp, _ = scene3d.build_pitch_animation(best.head(5), n_points=40, title=p)
-                if figp is not None:
-                    figp.update_layout(height=480)
-                    st.plotly_chart(figp, use_container_width=True)
+                png_c, _ = render_trajectories_png(best.head(5), pitcher=p, night=True)
+                if png_c is not None:
+                    st.image(png_c, use_container_width=True)
                 else:
                     st.info(f"Sin datos de trayectoria para {p}.")
 

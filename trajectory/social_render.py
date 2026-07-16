@@ -46,6 +46,11 @@ GRASS_A, GRASS_B = "#3e7c3a", "#468a41"
 DIRT = "#b98a5a"; DIRT_DARK = "#a97b4e"
 SKY_TOP, SKY_BOT = "#8ec9e8", "#dceef7"
 WALL = "#274e2b"
+# Paleta nocturna (partido de noche, look broadcast oscuro)
+GRASS_A_N, GRASS_B_N = "#123219", "#173d20"
+DIRT_N, DIRT_DARK_N = "#5a3f28", "#493320"
+SKY_TOP_N, SKY_BOT_N = "#05070d", "#16233b"     # cenit negro → horizonte azul tenue
+WALL_N = "#0d2213"
 
 RESULT_ES = {"StrikeCalled":"Strike cantado","StrikeSwinging":"Swing y falla",
              "BallCalled":"Bola","BallinDirt":"Bola (tierra)","FoulBall":"Foul",
@@ -62,66 +67,67 @@ def _ball_r(y):
     return BALL_VIS*F*BALL_R_FT/max(y - CAM_Y, 0.6)
 
 
-def _draw_field(ax):
-    """Campo en perspectiva: cielo, barda, grama con franjas, tierra, montículo."""
+def _draw_field(ax, night=False):
+    """Campo en perspectiva: cielo, barda, grama con franjas, tierra, montículo.
+    night=True → paleta nocturna (fondo oscuro, líneas claras)."""
+    if night:
+        g_a, g_b, dirt, dirt_dark, wall = GRASS_A_N, GRASS_B_N, DIRT_N, DIRT_DARK_N, WALL_N
+        sky_bot, sky_top = SKY_BOT_N, SKY_TOP_N
+        line_c, plate_c, plate_edge, rubber_c, zone_c = "#e8eef6", "#e2e8ef", "#9fb0c0", "#eef2f6", "#ffffff"
+    else:
+        g_a, g_b, dirt, dirt_dark, wall = GRASS_A, GRASS_B, DIRT, DIRT_DARK, WALL
+        sky_bot, sky_top = SKY_BOT, SKY_TOP
+        line_c, plate_c, plate_edge, rubber_c, zone_c = "#f5f5f5", "#fafafa", "#888888", "#f2f2f2", "#111111"
     # cielo con gradiente
     grad = np.linspace(0, 1, 120).reshape(-1, 1)
     ax.imshow(grad, extent=[XLIM[0], XLIM[1], 0.0, YLIM[1]], origin="lower",
-              cmap=matplotlib.colors.LinearSegmentedColormap.from_list(
-                  "sky", [SKY_BOT, SKY_TOP]),
+              cmap=matplotlib.colors.LinearSegmentedColormap.from_list("sky", [sky_bot, sky_top]),
               aspect="auto", zorder=0)
     # barda del outfield
     v_wall_base = F*(0.0-CAM_Z)/(400-CAM_Y); v_wall_top = F*(9.0-CAM_Z)/(400-CAM_Y)
     ax.add_patch(Rectangle((XLIM[0], v_wall_base), XLIM[1]-XLIM[0],
-                           v_wall_top-v_wall_base, color=WALL, zorder=1))
+                           v_wall_top-v_wall_base, color=wall, zorder=1))
     # grama con franjas (bandas de y proyectadas)
     edges = [14, 22, 32, 46, 66, 96, 140, 220, 400]
     for i in range(len(edges)-1):
         v1 = F*(0-CAM_Z)/(edges[i]-CAM_Y); v2 = F*(0-CAM_Z)/(edges[i+1]-CAM_Y)
         ax.add_patch(Rectangle((XLIM[0], v1), XLIM[1]-XLIM[0], v2-v1,
-                     color=GRASS_A if i % 2 else GRASS_B, zorder=1))
+                     color=g_a if i % 2 else g_b, zorder=1))
     # tierra frontal (círculo del home)
     v_home = F*(0-CAM_Z)/(14-CAM_Y)
     ax.add_patch(Rectangle((XLIM[0], YLIM[0]), XLIM[1]-XLIM[0],
-                           v_home-YLIM[0], color=DIRT, zorder=2))
+                           v_home-YLIM[0], color=dirt, zorder=2))
     # círculo de tierra del montículo
     y_n, y_f = 50.0, 68.0
     v_n = F*(0-CAM_Z)/(y_n-CAM_Y); v_f = F*(0-CAM_Z)/(y_f-CAM_Y)
     u_half = F*13.0/(59.0-CAM_Y)
-    ax.add_patch(mpatches.Ellipse((0, (v_n+v_f)/2), 2*u_half, (v_f-v_n),
-                                  color=DIRT, zorder=2))
+    ax.add_patch(mpatches.Ellipse((0, (v_n+v_f)/2), 2*u_half, (v_f-v_n), color=dirt, zorder=2))
     # lomita + goma
     u_m = F*4.5/(59.0-CAM_Y)
-    ax.add_patch(mpatches.Ellipse((0, (v_n+v_f)/2+0.012), 2*u_m, 0.05,
-                                  color=DIRT_DARK, zorder=3))
+    ax.add_patch(mpatches.Ellipse((0, (v_n+v_f)/2+0.012), 2*u_m, 0.05, color=dirt_dark, zorder=3))
     ux, vy = _proj(0, 60.5, 0.85)
-    ax.add_patch(Rectangle((ux-0.045, vy-0.006), 0.09, 0.012,
-                           color="#f2f2f2", zorder=4))
-    # (sin silueta de jugador — solo el vuelo de la pelota)
+    ax.add_patch(Rectangle((ux-0.045, vy-0.006), 0.09, 0.012, color=rubber_c, zorder=4))
     # líneas de foul (desde las esquinas del plato, a 45°)
     for sgn in (1, -1):
         ts = np.linspace(0.0, 90, 60)
         pts = [_proj(sgn*(0.71+t), 1.417+t, 0) for t in ts]
-        ax.plot([p[0] for p in pts], [p[1] for p in pts],
-                color="#f5f5f5", lw=2.4, alpha=0.9, zorder=3)
+        ax.plot([p[0] for p in pts], [p[1] for p in pts], color=line_c, lw=2.4, alpha=0.9, zorder=3)
     # plato (pentágono)
     plate = [(-0.71, 1.417), (0.71, 1.417), (0.71, 0.9), (0, 0.45), (-0.71, 0.9)]
     ax.add_patch(Polygon([_proj(px, py, 0.001) for px, py in plate],
-                         closed=True, facecolor="#fafafa",
-                         edgecolor="#888", lw=1.2, zorder=4))
+                         closed=True, facecolor=plate_c, edgecolor=plate_edge, lw=1.2, zorder=4))
     # cajas de bateo (bordes internos visibles)
     for sgn in (1, -1):
         seg = [_proj(sgn*1.21, yy, 0.001) for yy in np.linspace(0.6, 4.5, 12)]
-        ax.plot([p[0] for p in seg], [p[1] for p in seg],
-                color="#f0f0f0", lw=2.0, alpha=0.8, zorder=4)
+        ax.plot([p[0] for p in seg], [p[1] for p in seg], color=line_c, lw=2.0, alpha=0.7, zorder=4)
     # zona de strike
     u_z = F*ZONE_X/(1.417-CAM_Y)
     v_lo = F*(ZONE_LO-CAM_Z)/(1.417-CAM_Y); v_hi = F*(ZONE_HI-CAM_Z)/(1.417-CAM_Y)
     ax.add_patch(Rectangle((-u_z, v_lo), 2*u_z, v_hi-v_lo, fill=False,
-                           edgecolor="#111", lw=2.4, alpha=0.85, zorder=6))
+                           edgecolor=zone_c, lw=2.4, alpha=0.9, zorder=6))
     for f_ in (1/3, 2/3):
-        ax.plot([-u_z+2*u_z*f_]*2, [v_lo, v_hi], color="#111", lw=0.8, alpha=0.35, zorder=6)
-        ax.plot([-u_z, u_z], [v_lo+(v_hi-v_lo)*f_]*2, color="#111", lw=0.8, alpha=0.35, zorder=6)
+        ax.plot([-u_z+2*u_z*f_]*2, [v_lo, v_hi], color=zone_c, lw=0.8, alpha=0.4, zorder=6)
+        ax.plot([-u_z, u_z], [v_lo+(v_hi-v_lo)*f_]*2, color=zone_c, lw=0.8, alpha=0.4, zorder=6)
 
 
 # Curva real de la costura de una pelota de béisbol sobre la esfera unitaria
@@ -240,6 +246,43 @@ def _fig_to_pil(fig):
     return Image.open(buf).convert("RGB")
 
 
+def _fig_png_bytes(fig):
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", dpi=120, facecolor=fig.get_facecolor())
+    plt.close(fig)
+    buf.seek(0)
+    return buf.getvalue()
+
+
+def render_trajectories_png(rows: pd.DataFrame, pitcher: str = "", night: bool = True):
+    """Render estático realista (matplotlib) de TODAS las trayectorias sobre el campo en
+    perspectiva (catcher view). Cada pitcheo = cinta de color con glow + pelota con anillo al
+    cruzar el plato. Devuelve (png_bytes, [metrics...]) o (None, []) si no hay trayectorias."""
+    items = []
+    for i, (_, r) in enumerate(rows.iterrows()):
+        try:
+            p = compute_pitch_path(r, n_points=46)
+        except ValueError:
+            continue
+        items.append((p, _pt_color(r.get("TaggedPitchType"), i), pitch_metrics(r)))
+    if not items:
+        return None, []
+    fig, ax = _new_canvas()
+    _draw_field(ax, night=night)
+    _header(ax, (pitcher.strip() or "TRACKMAN"), "PITCH TRAJECTORIES · vista del catcher")
+    for p, col, _m in items:
+        us = [_proj(x, y, z)[0] for (x, y, z, _t) in p]
+        vs = [_proj(x, y, z)[1] for (x, y, z, _t) in p]
+        ax.plot(us, vs, color=col, lw=10, alpha=0.20, solid_capstyle="round", zorder=7)
+        ax.plot(us, vs, color=col, lw=3.4, alpha=0.98, solid_capstyle="round", zorder=8)
+        xf, yf, zf, _ = p[-1]
+        uf, vf = _proj(xf, yf, zf)
+        _draw_ball(ax, uf, vf, _ball_r(yf), 0.0, 0.0)
+        ax.add_patch(Circle((uf, vf), _ball_r(yf) * 1.7, fill=False,
+                            edgecolor=col, lw=2.6, zorder=13))
+    return _fig_png_bytes(fig), [it[2] for it in items]
+
+
 def _new_canvas(bg_img=None):
     fig = plt.figure(figsize=(9, 9), dpi=100)
     ax = fig.add_axes([0, 0, 1, 1])
@@ -262,7 +305,8 @@ def _header(ax, title, sub):
 
 def render_social_gif(rows: pd.DataFrame, pitcher: str = "", fps: int = 30,
                       travel_frames: int = 30, hold_frames: int = 10,
-                      endcard_frames: int = 36, use_average: bool = True) -> bytes | None:
+                      endcard_frames: int = 36, use_average: bool = True,
+                      night: bool = True) -> bytes | None:
     """
     GIF slow-motion para redes: el lanzamiento PROMEDIO de cada tipo de pitcheo
     (use_average=True, default) en secuencia sobre el campo, pelota de béisbol
@@ -287,7 +331,7 @@ def render_social_gif(rows: pd.DataFrame, pitcher: str = "", fps: int = 30,
 
     # fondo renderizado una sola vez
     fig_bg, ax_bg = _new_canvas()
-    _draw_field(ax_bg)
+    _draw_field(ax_bg, night=night)
     bg = np.asarray(_fig_to_pil(fig_bg))
 
     title = f"{pitcher}".strip() or "TRACKMAN"
