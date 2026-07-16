@@ -48,7 +48,8 @@ from core.metrics import (
     ZONE_HALF_WIDTH, ZONE_BOTTOM, ZONE_TOP, WOBA_W,
     count_pa, in_zone_mask, batted_ball_mask, barrel_mask, count_k_bb, compute_woba,
 )
-from core.pitching import (build_usage_by_count, arsenal_stuff, movement_points)
+from core.pitching import (build_usage_by_count, arsenal_stuff, movement_points,
+                           whiff_csw_zone_grid)
 from core.pitching import pitch_summary as build_pitch_summary
 from core.pitching import pitch_discipline as compute_pitch_discipline
 from viz import pitching as vpitch
@@ -1573,7 +1574,8 @@ def render_pitching(df, master_df, lmeta):
     fig_kde = vpitch.hot_zone(pf, selected)
     fig_vel = vpitch.velo_trend(pf, selected)
 
-    tab1, tab2, tab3, tab4 = st.tabs(["📋 Summary", "📍 Location", "📊 Trends", "🏟️ Stadium"])
+    tab1, tab2, tab3, tab4, tab5 = st.tabs(
+        ["📋 Summary", "📍 Location", "📊 Trends", "🎯 Whiff/CSW", "🏟️ Stadium"])
     with tab1:
         st.markdown('<div class="sh">🎯 Arsenal — Stuff</div>', unsafe_allow_html=True)
         st.checkbox("Mostrar pitcheos individuales", value=True, key="arsenal_show_ind")
@@ -1600,6 +1602,22 @@ def render_pitching(df, master_df, lmeta):
         st.plotly_chart(vpitch.usage_heatmap(build_usage_by_count(pf), selected),
                         use_container_width=True)
     with tab4:
+        st.markdown('<div class="sh">🎯 Whiff% / CSW% por zona</div>', unsafe_allow_html=True)
+        ptypes = ["Todos"] + sorted(pf["TaggedPitchType"].dropna().unique().tolist())
+        cq1, cq2 = st.columns([2, 3])
+        with cq1:
+            sel_pt = st.selectbox("Tipo de pitcheo", ptypes, key="whiffcsw_ptype")
+        with cq2:
+            sel_metric = st.radio("Métrica", ["Whiff %", "CSW %"], key="whiffcsw_metric",
+                                  horizontal=True)
+        sub = pf if sel_pt == "Todos" else pf[pf["TaggedPitchType"] == sel_pt]
+        grid = whiff_csw_zone_grid(sub)
+        metric = "whiff" if sel_metric == "Whiff %" else "csw"
+        st.plotly_chart(vpitch.zone_rate_heatmap(grid, metric, f"{selected} · {sel_pt}"),
+                        use_container_width=True)
+        st.caption(f"{grid['total_pitches']} pitcheos con ubicación · "
+                   "celdas con muestra baja (Whiff <4 swings / CSW <5 pitcheos) en gris con solo el conteo.")
+    with tab5:
         st.info("Stadium analysis coming soon.")
     st.markdown('<div class="sh">📤 Export</div>', unsafe_allow_html=True)
     dr = (f"{df['Date'].min().date()}→{df['Date'].max().date()}"
