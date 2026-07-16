@@ -55,6 +55,18 @@ El selector Pro / College / High School / Mixed ajusta todos los umbrales (Hard 
 
 Paquete independiente con motor físico de trayectorias release→plato, validación de rangos físicos, analítica (movement profile, release consistency, tendencias velo/spin) y API Flask documentada para integraciones externas. Ver `trajectory/README.md`. En el app: modo **🎯 Trayectorias 3D** con vista animada detrás del catcher (play/pausa + slider de frames), superposición de pitches, comparación de dos pitchers lado a lado, heatmaps por tipo y conteo, break chart, consistencia de release y tendencias por outing. Export: HTML interactivo y GIF vista-catcher. Tests: `pytest trajectory/tests/` (18 tests).
 
+## Changelog v4.11
+
+- 🌃 **Modo Trayectorias 3D con look "Statcast broadcast" de noche.** Escena realista
+  (matplotlib en perspectiva catcher): campo con franjas de corte, montículo, líneas de foul,
+  zona 3×3 y **pelotas reales con costuras**. Fondo oscuro con las cintas/pelotas iluminadas.
+- 🧾 **Panel PITCH ARSENAL fijo** a la izquierda en todas las vistas (tipo · velo · rpm/IVB/HB).
+- 🎯 Vista **Pitches Thrown**: pelotas ubicadas en la zona con anillo de color por tipo y
+  etiqueta de resultado (K/Out/1B/BB/HR).
+- 🎞️ **GIF slow-mo nocturno** con el panel al lado durante toda la animación (ya no una tarjeta
+  final). Animación, Pitches Thrown y GIF comparten el mismo motor realista de noche.
+- 🧹 Se retiró el intento previo en Plotly (`trajectory/scene3d.py`) en favor del render realista.
+
 ## Changelog v4.9
 
 - 🧱 Refactor "híbrido por fases": analítica de Pitching extraída a paquetes limpios

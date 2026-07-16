@@ -34,8 +34,8 @@ ZONE_X, ZONE_LO, ZONE_HI = 0.83, 1.5, 3.5
 
 PALETTE = ["#1f77b4","#d62728","#2ca02c","#ff7f0e","#9467bd","#8c564b"]
 STATCAST_COLORS={
-    "4-Seam":"#D22D49","Fastball":"#D22D49","Four-Seam Fastball":"#D22D49",
-    "2-Seam":"#DE6A04","Sinker":"#FE9D00","Cutter":"#933F2C","Slider":"#C3BD0E",
+    "4-Seam":"#D22D49","Fastball":"#D22D49","Four-Seam Fastball":"#D22D49","Four-Seam":"#D22D49",
+    "2-Seam":"#DE6A04","Two-Seam":"#DE6A04","Sinker":"#FE9D00","Cutter":"#933F2C","Slider":"#C3BD0E",
     "Sweeper":"#DDB33A","Curve":"#00D1ED","Curveball":"#00D1ED",
     "Change":"#1DBE3A","Changeup":"#1DBE3A","Split":"#3BACAC",
     "Knuckleball":"#3C44CD","Screwball":"#60DB33",
@@ -46,6 +46,11 @@ GRASS_A, GRASS_B = "#3e7c3a", "#468a41"
 DIRT = "#b98a5a"; DIRT_DARK = "#a97b4e"
 SKY_TOP, SKY_BOT = "#8ec9e8", "#dceef7"
 WALL = "#274e2b"
+# Paleta nocturna (partido de noche, look broadcast oscuro)
+GRASS_A_N, GRASS_B_N = "#123219", "#173d20"
+DIRT_N, DIRT_DARK_N = "#5a3f28", "#493320"
+SKY_TOP_N, SKY_BOT_N = "#05070d", "#16233b"     # cenit negro → horizonte azul tenue
+WALL_N = "#0d2213"
 
 RESULT_ES = {"StrikeCalled":"Strike cantado","StrikeSwinging":"Swing y falla",
              "BallCalled":"Bola","BallinDirt":"Bola (tierra)","FoulBall":"Foul",
@@ -62,66 +67,67 @@ def _ball_r(y):
     return BALL_VIS*F*BALL_R_FT/max(y - CAM_Y, 0.6)
 
 
-def _draw_field(ax):
-    """Campo en perspectiva: cielo, barda, grama con franjas, tierra, montículo."""
+def _draw_field(ax, night=False):
+    """Campo en perspectiva: cielo, barda, grama con franjas, tierra, montículo.
+    night=True → paleta nocturna (fondo oscuro, líneas claras)."""
+    if night:
+        g_a, g_b, dirt, dirt_dark, wall = GRASS_A_N, GRASS_B_N, DIRT_N, DIRT_DARK_N, WALL_N
+        sky_bot, sky_top = SKY_BOT_N, SKY_TOP_N
+        line_c, plate_c, plate_edge, rubber_c, zone_c = "#e8eef6", "#e2e8ef", "#9fb0c0", "#eef2f6", "#ffffff"
+    else:
+        g_a, g_b, dirt, dirt_dark, wall = GRASS_A, GRASS_B, DIRT, DIRT_DARK, WALL
+        sky_bot, sky_top = SKY_BOT, SKY_TOP
+        line_c, plate_c, plate_edge, rubber_c, zone_c = "#f5f5f5", "#fafafa", "#888888", "#f2f2f2", "#111111"
     # cielo con gradiente
     grad = np.linspace(0, 1, 120).reshape(-1, 1)
     ax.imshow(grad, extent=[XLIM[0], XLIM[1], 0.0, YLIM[1]], origin="lower",
-              cmap=matplotlib.colors.LinearSegmentedColormap.from_list(
-                  "sky", [SKY_BOT, SKY_TOP]),
+              cmap=matplotlib.colors.LinearSegmentedColormap.from_list("sky", [sky_bot, sky_top]),
               aspect="auto", zorder=0)
     # barda del outfield
     v_wall_base = F*(0.0-CAM_Z)/(400-CAM_Y); v_wall_top = F*(9.0-CAM_Z)/(400-CAM_Y)
     ax.add_patch(Rectangle((XLIM[0], v_wall_base), XLIM[1]-XLIM[0],
-                           v_wall_top-v_wall_base, color=WALL, zorder=1))
+                           v_wall_top-v_wall_base, color=wall, zorder=1))
     # grama con franjas (bandas de y proyectadas)
     edges = [14, 22, 32, 46, 66, 96, 140, 220, 400]
     for i in range(len(edges)-1):
         v1 = F*(0-CAM_Z)/(edges[i]-CAM_Y); v2 = F*(0-CAM_Z)/(edges[i+1]-CAM_Y)
         ax.add_patch(Rectangle((XLIM[0], v1), XLIM[1]-XLIM[0], v2-v1,
-                     color=GRASS_A if i % 2 else GRASS_B, zorder=1))
+                     color=g_a if i % 2 else g_b, zorder=1))
     # tierra frontal (círculo del home)
     v_home = F*(0-CAM_Z)/(14-CAM_Y)
     ax.add_patch(Rectangle((XLIM[0], YLIM[0]), XLIM[1]-XLIM[0],
-                           v_home-YLIM[0], color=DIRT, zorder=2))
+                           v_home-YLIM[0], color=dirt, zorder=2))
     # círculo de tierra del montículo
     y_n, y_f = 50.0, 68.0
     v_n = F*(0-CAM_Z)/(y_n-CAM_Y); v_f = F*(0-CAM_Z)/(y_f-CAM_Y)
     u_half = F*13.0/(59.0-CAM_Y)
-    ax.add_patch(mpatches.Ellipse((0, (v_n+v_f)/2), 2*u_half, (v_f-v_n),
-                                  color=DIRT, zorder=2))
+    ax.add_patch(mpatches.Ellipse((0, (v_n+v_f)/2), 2*u_half, (v_f-v_n), color=dirt, zorder=2))
     # lomita + goma
     u_m = F*4.5/(59.0-CAM_Y)
-    ax.add_patch(mpatches.Ellipse((0, (v_n+v_f)/2+0.012), 2*u_m, 0.05,
-                                  color=DIRT_DARK, zorder=3))
+    ax.add_patch(mpatches.Ellipse((0, (v_n+v_f)/2+0.012), 2*u_m, 0.05, color=dirt_dark, zorder=3))
     ux, vy = _proj(0, 60.5, 0.85)
-    ax.add_patch(Rectangle((ux-0.045, vy-0.006), 0.09, 0.012,
-                           color="#f2f2f2", zorder=4))
-    # (sin silueta de jugador — solo el vuelo de la pelota)
+    ax.add_patch(Rectangle((ux-0.045, vy-0.006), 0.09, 0.012, color=rubber_c, zorder=4))
     # líneas de foul (desde las esquinas del plato, a 45°)
     for sgn in (1, -1):
         ts = np.linspace(0.0, 90, 60)
         pts = [_proj(sgn*(0.71+t), 1.417+t, 0) for t in ts]
-        ax.plot([p[0] for p in pts], [p[1] for p in pts],
-                color="#f5f5f5", lw=2.4, alpha=0.9, zorder=3)
+        ax.plot([p[0] for p in pts], [p[1] for p in pts], color=line_c, lw=2.4, alpha=0.9, zorder=3)
     # plato (pentágono)
     plate = [(-0.71, 1.417), (0.71, 1.417), (0.71, 0.9), (0, 0.45), (-0.71, 0.9)]
     ax.add_patch(Polygon([_proj(px, py, 0.001) for px, py in plate],
-                         closed=True, facecolor="#fafafa",
-                         edgecolor="#888", lw=1.2, zorder=4))
+                         closed=True, facecolor=plate_c, edgecolor=plate_edge, lw=1.2, zorder=4))
     # cajas de bateo (bordes internos visibles)
     for sgn in (1, -1):
         seg = [_proj(sgn*1.21, yy, 0.001) for yy in np.linspace(0.6, 4.5, 12)]
-        ax.plot([p[0] for p in seg], [p[1] for p in seg],
-                color="#f0f0f0", lw=2.0, alpha=0.8, zorder=4)
+        ax.plot([p[0] for p in seg], [p[1] for p in seg], color=line_c, lw=2.0, alpha=0.7, zorder=4)
     # zona de strike
     u_z = F*ZONE_X/(1.417-CAM_Y)
     v_lo = F*(ZONE_LO-CAM_Z)/(1.417-CAM_Y); v_hi = F*(ZONE_HI-CAM_Z)/(1.417-CAM_Y)
     ax.add_patch(Rectangle((-u_z, v_lo), 2*u_z, v_hi-v_lo, fill=False,
-                           edgecolor="#111", lw=2.4, alpha=0.85, zorder=6))
+                           edgecolor=zone_c, lw=2.4, alpha=0.9, zorder=6))
     for f_ in (1/3, 2/3):
-        ax.plot([-u_z+2*u_z*f_]*2, [v_lo, v_hi], color="#111", lw=0.8, alpha=0.35, zorder=6)
-        ax.plot([-u_z, u_z], [v_lo+(v_hi-v_lo)*f_]*2, color="#111", lw=0.8, alpha=0.35, zorder=6)
+        ax.plot([-u_z+2*u_z*f_]*2, [v_lo, v_hi], color=zone_c, lw=0.8, alpha=0.4, zorder=6)
+        ax.plot([-u_z, u_z], [v_lo+(v_hi-v_lo)*f_]*2, color=zone_c, lw=0.8, alpha=0.4, zorder=6)
 
 
 # Curva real de la costura de una pelota de béisbol sobre la esfera unitaria
@@ -240,6 +246,105 @@ def _fig_to_pil(fig):
     return Image.open(buf).convert("RGB")
 
 
+def _fig_png_bytes(fig):
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", dpi=120, facecolor=fig.get_facecolor())
+    plt.close(fig)
+    buf.seek(0)
+    return buf.getvalue()
+
+
+def _type_color_map(rows):
+    """{tipo: color} y el orden de tipos por frecuencia — colores consistentes entre panel y balls."""
+    from collections import Counter
+    if "TaggedPitchType" not in rows.columns:
+        return {}, []
+    types = rows["TaggedPitchType"].astype(str)
+    order = [t for t, _ in Counter(types).most_common()]
+    return {t: _pt_color(t, i) for i, t in enumerate(order)}, order
+
+
+def _panel_entries(rows, cmap, order):
+    """Entradas del panel PITCH ARSENAL por tipo: (color, TIPO, velo, 'rpm · IVB · HB')."""
+    inch = '"'
+    types = rows["TaggedPitchType"].astype(str) if "TaggedPitchType" in rows.columns else None
+    out = []
+    for t in order:
+        g = rows[types == t]
+        velo = (_fmt(g["RelSpeed"].mean(), " mph")
+                if "RelSpeed" in g.columns and g["RelSpeed"].notna().any() else "—")
+        ivbcol = ("InducedVertBreak" if "InducedVertBreak" in g.columns
+                  else ("VertBreak" if "VertBreak" in g.columns else None))
+        ivb = g[ivbcol].mean() if ivbcol else None
+        hb = g["HorzBreak"].mean() if "HorzBreak" in g.columns else None
+        spin = g["SpinRate"].mean() if "SpinRate" in g.columns else None
+        det = f"{_fmt(spin, ' rpm', 0)} · IVB {_fmt(ivb, inch)} · HB {_fmt(hb, inch)}"
+        out.append((cmap.get(t, "#cccccc"), t, velo, det))
+    return out
+
+
+def render_trajectories_png(rows: pd.DataFrame, pitcher: str = "", night: bool = True):
+    """Render estático realista (matplotlib) de TODAS las trayectorias sobre el campo en
+    perspectiva (catcher view), con panel PITCH ARSENAL fijo a la izquierda. Cada pitcheo = cinta
+    de color con glow + pelota con anillo al cruzar el plato. Devuelve (png_bytes, [metrics...])."""
+    cmap, order = _type_color_map(rows)
+    items = []
+    for _, r in rows.iterrows():
+        try:
+            p = compute_pitch_path(r, n_points=46)
+        except ValueError:
+            continue
+        items.append((p, cmap.get(str(r.get("TaggedPitchType")), "#cccccc"), pitch_metrics(r)))
+    if not items:
+        return None, []
+    fig, ax = _new_canvas()
+    _draw_field(ax, night=night)
+    _draw_side_panel(ax, (pitcher.strip() or "TRACKMAN"), _panel_entries(rows, cmap, order))
+    for p, col, _m in items:
+        us = [_proj(x, y, z)[0] for (x, y, z, _t) in p]
+        vs = [_proj(x, y, z)[1] for (x, y, z, _t) in p]
+        ax.plot(us, vs, color=col, lw=10, alpha=0.20, solid_capstyle="round", zorder=7)
+        ax.plot(us, vs, color=col, lw=3.4, alpha=0.98, solid_capstyle="round", zorder=8)
+        xf, yf, zf, _ = p[-1]
+        uf, vf = _proj(xf, yf, zf)
+        _draw_ball(ax, uf, vf, _ball_r(yf), 0.0, 0.0)
+        ax.add_patch(Circle((uf, vf), _ball_r(yf) * 1.7, fill=False,
+                            edgecolor=col, lw=2.6, zorder=13))
+    return _fig_png_bytes(fig), [it[2] for it in items]
+
+
+_TERMINAL_RESULTS = {"1B", "2B", "3B", "HR", "Out", "K", "BB", "HBP", "FC",
+                     "Error", "SacFly", "SacBunt"}
+
+
+def render_pitches_thrown_png(rows: pd.DataFrame, pitcher: str = "", night: bool = True):
+    """Vista estática realista (matplotlib) de las pelotas ubicadas en la zona (catcher view):
+    cada pitcheo como pelota real con anillo de color por tipo y etiqueta de resultado, sobre el
+    mismo campo (día/noche) que la animación. Panel lateral fijo. Devuelve (png_bytes, n)."""
+    if not {"PlateLocSide", "PlateLocHeight"}.issubset(rows.columns):
+        return None, 0
+    loc = rows.dropna(subset=["PlateLocSide", "PlateLocHeight"]).copy()
+    if loc.empty:
+        return None, 0
+    cmap, order = _type_color_map(loc)
+    fig, ax = _new_canvas()
+    _draw_field(ax, night=night)
+    _draw_side_panel(ax, (pitcher.strip() or "TRACKMAN"), _panel_entries(loc, cmap, order))
+    rb = _ball_r(1.417)
+    for _, r in loc.iterrows():
+        col = cmap.get(str(r.get("TaggedPitchType")), "#cccccc")
+        u, v = _proj(float(r["PlateLocSide"]), 1.417, float(r["PlateLocHeight"]))
+        _draw_ball(ax, u, v, rb * 0.85, 0.0, 0.0)
+        ax.add_patch(Circle((u, v), rb * 1.35, fill=False, edgecolor=col, lw=2.4, zorder=13))
+        res = str(r.get("PlayResult", "")) if pd.notna(r.get("PlayResult", None)) else ""
+        if res in _TERMINAL_RESULTS:
+            ax.text(u, v + rb * 2.1, res, ha="center", fontsize=9.5, fontweight="bold",
+                    color="#ffffff", zorder=14,
+                    path_effects=[matplotlib.patheffects.withStroke(
+                        linewidth=2.2, foreground="#000000cc")])
+    return _fig_png_bytes(fig), int(len(loc))
+
+
 def _new_canvas(bg_img=None):
     fig = plt.figure(figsize=(9, 9), dpi=100)
     ax = fig.add_axes([0, 0, 1, 1])
@@ -251,25 +356,44 @@ def _new_canvas(bg_img=None):
     return fig, ax
 
 
-def _header(ax, title, sub):
-    ax.text(0.03, 0.975, title, transform=ax.transAxes, fontsize=21,
-            fontweight="bold", color="#ffffff", va="top",
-            path_effects=[matplotlib.patheffects.withStroke(linewidth=3, foreground="#00000088")])
-    ax.text(0.03, 0.925, sub, transform=ax.transAxes, fontsize=12.5,
-            color="#ffffff", va="top", alpha=0.95,
-            path_effects=[matplotlib.patheffects.withStroke(linewidth=2.5, foreground="#00000066")])
+def _draw_side_panel(ax, title, entries):
+    """Panel lateral FIJO estilo broadcast PITCH ARSENAL (rojo). Idéntico en cada frame.
+    entries: [(color, label, velo_str, detail_str)] — dos líneas por pitcheo."""
+    n = len(entries)
+    row_h = min(0.118, 0.68 / max(n, 1))
+    px0, pw = 0.022, 0.35
+    py1 = 0.955
+    ph = 0.108 + n * row_h
+    py0 = py1 - ph
+    ax.add_patch(FancyBboxPatch((px0, py0), pw, ph, transform=ax.transAxes,
+                 boxstyle="round,pad=0.006", facecolor="#8e0e24f0",
+                 edgecolor="#ffffff2e", lw=1.2, zorder=30))
+    ax.text(px0 + 0.018, py1 - 0.028, title, transform=ax.transAxes, fontsize=15,
+            fontweight="bold", color="#ffffff", va="top", zorder=31)
+    ax.text(px0 + 0.018, py1 - 0.07, "PITCH ARSENAL", transform=ax.transAxes,
+            fontsize=8, color="#ffffffcc", va="top", zorder=31)
+    for i, (col, lbl, velo, detail) in enumerate(entries):
+        yt = py1 - 0.108 - i * row_h - row_h * 0.30
+        ax.add_patch(Circle((px0 + 0.028, yt), 0.0105, transform=ax.transAxes,
+                     facecolor="#ffffff", edgecolor=col, lw=3.0, zorder=31))
+        ax.text(px0 + 0.052, yt, str(lbl).upper(), transform=ax.transAxes, fontsize=10.5,
+                fontweight="bold", color="#ffffff", va="center", zorder=31)
+        ax.text(px0 + pw - 0.016, yt, velo, transform=ax.transAxes, fontsize=9.5,
+                color="#ffffffe6", va="center", ha="right", zorder=31)
+        ax.text(px0 + 0.052, yt - row_h * 0.40, detail, transform=ax.transAxes, fontsize=7.5,
+                color="#f4ccd4", va="center", zorder=31)
 
 
 def render_social_gif(rows: pd.DataFrame, pitcher: str = "", fps: int = 30,
                       travel_frames: int = 30, hold_frames: int = 10,
-                      endcard_frames: int = 36, use_average: bool = True) -> bytes | None:
+                      endcard_frames: int = 36, use_average: bool = True,
+                      night: bool = True) -> bytes | None:
     """
     GIF slow-motion para redes: el lanzamiento PROMEDIO de cada tipo de pitcheo
     (use_average=True, default) en secuencia sobre el campo, pelota de béisbol
     con spin realista, y tarjeta final con las métricas promedio de cada uno.
     Con use_average=False anima los pitches individuales recibidos.
     """
-    import matplotlib.patheffects  # noqa: F401 (usado vía _header)
     if use_average:
         rows = average_pitches(rows)
         if rows.empty: return None
@@ -287,15 +411,23 @@ def render_social_gif(rows: pd.DataFrame, pitcher: str = "", fps: int = 30,
 
     # fondo renderizado una sola vez
     fig_bg, ax_bg = _new_canvas()
-    _draw_field(ax_bg)
+    _draw_field(ax_bg, night=night)
     bg = np.asarray(_fig_to_pil(fig_bg))
 
     title = f"{pitcher}".strip() or "TRACKMAN"
     frames = []      # [(PIL.Image, duración_ms)] — frames únicos con duración propia
     FRAME_MS = int(1000/fps)
 
+    _inch = '"'
+    def _pentry(p):
+        r, met = p["row"], p["metrics"]
+        ivb = r.get("InducedVertBreak", r.get("VertBreak"))
+        det = (f"{_fmt(r.get('SpinRate'), ' rpm', 0)} · IVB {_fmt(ivb, _inch)} · "
+               f"HB {_fmt(r.get('HorzBreak'), _inch)}")
+        return (p["color"], p["label"], _fmt(r.get("RelSpeed"), " mph"), det)
+    entries = [_pentry(p) for p in pitches]
     landed = []   # [(u,v,color,texto)]
-    for p in pitches:
+    for pi, p in enumerate(pitches):
         row, path, met = p["row"], p["path"], p["metrics"]
         spin = float(row.get("SpinRate") or 2200.0)
         axis = float(row.get("SpinAxis") or 200.0) - 180.0
@@ -309,7 +441,7 @@ def render_social_gif(rows: pd.DataFrame, pitcher: str = "", fps: int = 30,
         prev_uv = None
         for k in range(travel_frames):
             fig, ax = _new_canvas(bg)
-            _header(ax, title, sub)
+            _draw_side_panel(ax, title, entries)
             # marcadores de pitches anteriores
             for (lu, lv, lc, _txt) in landed:
                 ax.add_patch(Circle((lu, lv), 0.14, fill=False,
@@ -336,7 +468,7 @@ def render_social_gif(rows: pd.DataFrame, pitcher: str = "", fps: int = 30,
         res = _result_text(row)
         landed.append((uf, vf, p["color"], res))
         fig, ax = _new_canvas(bg)
-        _header(ax, title, sub)
+        _draw_side_panel(ax, title, entries)
         for (lu, lv, lc, _txt) in landed[:-1]:
             ax.add_patch(Circle((lu, lv), 0.14, fill=False,
                                 edgecolor=lc, lw=2.4, alpha=0.9, zorder=7))
@@ -350,41 +482,15 @@ def render_social_gif(rows: pd.DataFrame, pitcher: str = "", fps: int = 30,
                           facecolor=p["color"], edgecolor="none", alpha=0.93))
         frames.append((_fig_to_pil(fig), hold_frames*FRAME_MS))
 
-    # ── tarjeta final de métricas ────────────────────────────────────────
+    # ── frame final: todos los pitcheos aterrizados, con el panel al lado ──
     fig, ax = _new_canvas(bg)
+    _draw_side_panel(ax, title, entries)
     for (lu, lv, lc, _txt) in landed:
         ax.add_patch(Circle((lu, lv), 0.14, fill=False,
-                            edgecolor=lc, lw=2.4, alpha=0.8, zorder=7))
-    ax.add_patch(FancyBboxPatch((0.06, 0.08), 0.88, 0.84,
-                 transform=ax.transAxes, boxstyle="round,pad=0.015",
-                 facecolor="#0d1b2acc", edgecolor="#ffffff33", lw=1.5, zorder=20))
-    ax.text(0.5, 0.86, title, transform=ax.transAxes, ha="center",
-            fontsize=22, fontweight="bold", color="#ffffff", zorder=21)
-    subtitle_card = ("PROMEDIO POR TIPO DE LANZAMIENTO" if use_average
-                     else "RESUMEN DE LANZAMIENTOS")
-    ax.text(0.5, 0.815, subtitle_card, transform=ax.transAxes,
-            ha="center", fontsize=11, color="#8ea8c3", zorder=21)
-    n = len(pitches)
-    row_h = min(0.145, 0.62/n)
-    for i, p in enumerate(pitches):
-        r, met = p["row"], p["metrics"]
-        y0 = 0.75 - i*row_h
-        ax.add_patch(Circle((0.115, y0-0.012), 0.016, transform=ax.transAxes,
-                            color=p["color"], zorder=22))
-        ax.text(0.15, y0, f"{p['label']}  ·  {_fmt(r.get('RelSpeed'),' mph')}  ·  "
-                f"{_fmt(r.get('SpinRate'),' rpm',0)}",
-                transform=ax.transAxes, fontsize=14.5, fontweight="bold",
-                color="#ffffff", va="center", zorder=22)
-        ivb = r.get("InducedVertBreak", r.get("VertBreak"))
-        inch = '"'
-        det = (f"HB {_fmt(r.get('HorzBreak'), inch)}  ·  IVB {_fmt(ivb, inch)}  ·  "
-               f"VAA {_fmt(met.get('vaa_deg'),'°')}  ·  "
-               f"{_result_text(r)}")
-        ax.text(0.15, y0-0.042, det, transform=ax.transAxes, fontsize=11,
-                color="#b9cbdd", va="center", zorder=22)
-    ax.text(0.5, 0.115, "Generado con Trackman Analytics", transform=ax.transAxes,
-            ha="center", fontsize=9.5, color="#8ea8c3", alpha=0.8, zorder=21)
-    frames.append((_fig_to_pil(fig), endcard_frames*FRAME_MS + 1500))
+                            edgecolor=lc, lw=2.6, alpha=0.95, zorder=7))
+    ax.text(0.985, 0.02, "Generado con Trackman Analytics", transform=ax.transAxes,
+            ha="right", fontsize=9.5, color="#ffffffb0", zorder=21)
+    frames.append((_fig_to_pil(fig), endcard_frames*FRAME_MS + 800))
 
     out = io.BytesIO()
     imgs = [f.quantize(colors=220, method=Image.MEDIANCUT) for f, _ in frames]
