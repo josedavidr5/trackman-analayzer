@@ -175,3 +175,48 @@ def usage_heatmap(tab, name):
     lay["yaxis"] = dict(autorange="reversed")
     fig.update_layout(**lay)
     return fig
+
+
+def zone_rate_heatmap(grid, metric, name):
+    """Heatmap 5×5 de Whiff% o CSW% por celda. Celdas no confiables en gris (solo n)."""
+    cells = grid.get("cells", [])
+    if not cells:
+        return theme.empty_fig("No hay datos de ubicación/PitchCall")
+    rate_key = "whiff_pct" if metric == "whiff" else "csw_pct"
+    rel_key = "whiff_reliable" if metric == "whiff" else "csw_reliable"
+    label = "Whiff%" if metric == "whiff" else "CSW%"
+    x_edges, z_edges = grid["x_edges"], grid["z_edges"]
+    xc = [(x_edges[i] + x_edges[i + 1]) / 2 for i in range(5)]
+    zc = [(z_edges[i] + z_edges[i + 1]) / 2 for i in range(5)]
+    z = [[None] * 5 for _ in range(5)]
+    hovertext = [["" for _ in range(5)] for _ in range(5)]
+    ann = []
+    for c in cells:
+        ix, iz, n = c["ix"], c["iz"], c["n_pitches"]
+        if n == 0:
+            continue
+        if c[rel_key]:
+            z[iz][ix] = c[rate_key]
+            if metric == "whiff":
+                num, den = c["whiffs"], c["n_swings"]
+            else:
+                num, den = c["called"] + c["whiffs"], n
+            hovertext[iz][ix] = f"{label}: {c[rate_key]:.0f}%<br>{num}/{den} · n={n}"
+            ann.append(dict(x=xc[ix], y=zc[iz], text=f"{c[rate_key]:.0f}%<br>({n})",
+                            showarrow=False, font=dict(size=10, color="#222222")))
+        else:
+            hovertext[iz][ix] = f"muestra baja · n={n}"
+            ann.append(dict(x=xc[ix], y=zc[iz], text=f"({n})",
+                            showarrow=False, font=dict(size=9, color="#999999")))
+    fig = go.Figure(go.Heatmap(
+        x=xc, y=zc, z=z, colorscale=[[0, "#ffffff"], [0.5, "#f6b6a8"], [1, "#D22D49"]],
+        zmin=0, zmax=100, xgap=2, ygap=2, hoverongaps=False,
+        colorbar=dict(title=label), hovertext=hovertext, hoverinfo="text"))
+    lay = theme.base_layout(f"{label} por zona", f"{name} · vista del catcher")
+    lay["shapes"] = theme.strike_zone_shapes()
+    lay["annotations"] = ann
+    lay["xaxis"] = dict(range=[-1.5, 1.5], gridcolor=theme.GRID, zeroline=False)
+    lay["yaxis"] = dict(range=[0.7, 4.3], gridcolor=theme.GRID, zeroline=False,
+                        scaleanchor="x", scaleratio=1)
+    fig.update_layout(**lay)
+    return fig

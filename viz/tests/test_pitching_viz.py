@@ -1,6 +1,6 @@
 import plotly.graph_objects as go
 import pandas as pd
-from core.pitching import movement_points, build_usage_by_count
+from core.pitching import movement_points, build_usage_by_count, whiff_csw_zone_grid
 from viz import pitching as vp
 
 
@@ -116,3 +116,26 @@ def test_velo_trend_missing_pitchtype_degrades():
                        "Date": pd.to_datetime(["2026-06-01", "2026-06-02", "2026-06-01"])})
     f = vp.velo_trend(df, "P")
     assert f.layout.annotations
+
+
+def _zone_grid():
+    df = pd.DataFrame({
+        "PlateLocSide":  [0.0, 0.1, -0.1, 0.0, 0.5, -0.5],
+        "PlateLocHeight": [2.5, 2.4, 2.6, 2.0, 3.0, 2.2],
+        "PitchCall": ["StrikeSwinging", "FoulBall", "StrikeCalled", "InPlay",
+                      "BallCalled", "StrikeSwinging"],
+    })
+    return whiff_csw_zone_grid(df)
+
+
+def test_zone_rate_heatmap_whiff_and_csw():
+    g = _zone_grid()
+    assert isinstance(vp.zone_rate_heatmap(g, "whiff", "P"), go.Figure)
+    assert isinstance(vp.zone_rate_heatmap(g, "csw", "P"), go.Figure)
+
+
+def test_zone_rate_heatmap_empty_degrades():
+    empty = whiff_csw_zone_grid(pd.DataFrame())
+    f = vp.zone_rate_heatmap(empty, "whiff", "P")
+    assert isinstance(f, go.Figure)
+    assert f.layout.annotations  # empty_fig añade una anotación

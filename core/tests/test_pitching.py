@@ -56,3 +56,57 @@ def test_regression_matches_monolith_summary():
     assert fb["Count"] == 2
     assert fb["Usage %"] == round(100 * 2 / 6, 1)
     assert fb["Avg mph"] == 94.5
+
+from core.pitching import whiff_csw_zone_grid
+
+def _cell(grid, ix, iz):
+    return next(c for c in grid["cells"] if c["ix"] == ix and c["iz"] == iz)
+
+def test_zone_grid_center_cell_rates():
+    # Celda central (ix=2, iz=2): x∈[-0.277,0.277], z∈[2.167,2.833] → usar x=0, z=2.5
+    df = pd.DataFrame({
+        "PlateLocSide":  [0.0, 0.0, 0.0, 0.0],
+        "PlateLocHeight":[2.5, 2.5, 2.5, 2.5],
+        "PitchCall": ["StrikeSwinging", "StrikeSwinging", "FoulBall", "StrikeCalled"],
+    })
+    grid = whiff_csw_zone_grid(df)
+    c = _cell(grid, 2, 2)
+    assert c["n_pitches"] == 4
+    assert c["n_swings"] == 3          # 2 StrikeSwinging + 1 FoulBall
+    assert c["whiffs"] == 2
+    assert c["called"] == 1
+    assert c["whiff_pct"] == round(100 * 2 / 3, 1)      # whiffs/swings
+    assert c["csw_pct"] == round(100 * (1 + 2) / 4, 1)  # (called+whiffs)/pitches
+
+def test_zone_grid_reliability_flags():
+    # 1 solo swing en una celda → whiff no confiable; <5 pitcheos → csw no confiable
+    df = pd.DataFrame({
+        "PlateLocSide": [0.0], "PlateLocHeight": [2.5],
+        "PitchCall": ["StrikeSwinging"],
+    })
+    c = _cell(whiff_csw_zone_grid(df), 2, 2)
+    assert c["whiff_reliable"] is False   # 1 swing < 4
+    assert c["csw_reliable"] is False     # 1 pitch < 5
+
+def test_zone_grid_outer_clamp():
+    # Pitcheo muy afuera a la derecha (x=3.0) cae en la columna de borde ix=4;
+    # muy abajo (z=0.2) cae en iz=0.
+    df = pd.DataFrame({
+        "PlateLocSide": [3.0], "PlateLocHeight": [0.2],
+        "PitchCall": ["BallCalled"],
+    })
+    c = _cell(whiff_csw_zone_grid(df), 4, 0)
+    assert c["n_pitches"] == 1
+
+def test_zone_grid_inner_3x3_is_strike_zone():
+    from core.metrics import ZONE_HALF_WIDTH, ZONE_BOTTOM, ZONE_TOP
+    grid = whiff_csw_zone_grid(pd.DataFrame({"PlateLocSide": [], "PlateLocHeight": [], "PitchCall": []}))
+    # bordes internos coinciden con la zona
+    assert grid["x_edges"][1] == -ZONE_HALF_WIDTH
+    assert grid["x_edges"][4] == ZONE_HALF_WIDTH
+    assert grid["z_edges"][1] == ZONE_BOTTOM
+    assert grid["z_edges"][4] == ZONE_TOP
+
+def test_zone_grid_missing_columns_no_raise():
+    assert whiff_csw_zone_grid(pd.DataFrame({"PlateLocSide": [0.0]}))["cells"] == []
+    assert whiff_csw_zone_grid(pd.DataFrame())["cells"] == []
