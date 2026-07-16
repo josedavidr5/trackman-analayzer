@@ -200,30 +200,6 @@ def build_3d_figure(rows, n_points=50, title=""):
     return fig, metas
 
 
-def arsenal_panel_html(pitcher, rows):
-    """Panel de arsenal estilo broadcast MLB: [(color, label, n, velo_avg)]."""
-    items="".join(
-        f'<div style="display:flex;align-items:center;gap:10px;padding:8px 14px;'
-        f'border-bottom:1px solid rgba(255,255,255,.14)">'
-        f'<span style="width:15px;height:15px;border-radius:50%;background:#fff;'
-        f'border:4px solid {c};display:inline-block;flex:none"></span>'
-        f'<span style="flex:1;font-weight:700;font-size:.82rem;'
-        f'letter-spacing:.05em;text-transform:uppercase">{lbl}</span>'
-        f'<span style="font-weight:800;font-size:1.0rem">{n}</span>'
-        f'<span style="opacity:.8;font-size:.72rem;width:56px;text-align:right">'
-        f'{velo}</span></div>'
-        for c,lbl,n,velo in rows)
-    return (
-        f'<div style="background:linear-gradient(165deg,#b5122e 0%,#8e0e24 100%);'
-        f'border-radius:12px;color:#fff;overflow:hidden;'
-        f'box-shadow:0 8px 22px rgba(0,0,0,.35);font-family:inherit">'
-        f'<div style="padding:12px 14px 4px 14px;font-size:1.08rem;font-weight:800;'
-        f'letter-spacing:.02em">{pitcher}</div>'
-        f'<div style="padding:0 14px 9px 14px;font-size:.62rem;letter-spacing:.22em;'
-        f'opacity:.85;border-bottom:2px solid rgba(255,255,255,.3)">PITCH ARSENAL</div>'
-        f'{items}</div>')
-
-
 def _gif_bytes(rows, n_points=40, fps=24):
     """GIF vista-catcher (x,z) con profundidad simulada — para redes/reportes."""
     import matplotlib

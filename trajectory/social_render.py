@@ -356,15 +356,6 @@ def _new_canvas(bg_img=None):
     return fig, ax
 
 
-def _header(ax, title, sub):
-    ax.text(0.03, 0.975, title, transform=ax.transAxes, fontsize=21,
-            fontweight="bold", color="#ffffff", va="top",
-            path_effects=[matplotlib.patheffects.withStroke(linewidth=3, foreground="#00000088")])
-    ax.text(0.03, 0.925, sub, transform=ax.transAxes, fontsize=12.5,
-            color="#ffffff", va="top", alpha=0.95,
-            path_effects=[matplotlib.patheffects.withStroke(linewidth=2.5, foreground="#00000066")])
-
-
 def _draw_side_panel(ax, title, entries):
     """Panel lateral FIJO estilo broadcast PITCH ARSENAL (rojo). Idéntico en cada frame.
     entries: [(color, label, velo_str, detail_str)] — dos líneas por pitcheo."""
@@ -403,7 +394,6 @@ def render_social_gif(rows: pd.DataFrame, pitcher: str = "", fps: int = 30,
     con spin realista, y tarjeta final con las métricas promedio de cada uno.
     Con use_average=False anima los pitches individuales recibidos.
     """
-    import matplotlib.patheffects  # noqa: F401 (usado vía _header)
     if use_average:
         rows = average_pitches(rows)
         if rows.empty: return None
@@ -478,7 +468,7 @@ def render_social_gif(rows: pd.DataFrame, pitcher: str = "", fps: int = 30,
         res = _result_text(row)
         landed.append((uf, vf, p["color"], res))
         fig, ax = _new_canvas(bg)
-        _header(ax, title, sub)
+        _draw_side_panel(ax, title, entries)
         for (lu, lv, lc, _txt) in landed[:-1]:
             ax.add_patch(Circle((lu, lv), 0.14, fill=False,
                                 edgecolor=lc, lw=2.4, alpha=0.9, zorder=7))
