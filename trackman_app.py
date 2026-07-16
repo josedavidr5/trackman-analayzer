@@ -52,7 +52,12 @@ from core.pitching import (build_usage_by_count, arsenal_stuff, movement_points,
                            whiff_csw_zone_grid)
 from core.pitching import pitch_summary as build_pitch_summary
 from core.pitching import pitch_discipline as compute_pitch_discipline
+from core.hitting import (build_play_result_table, compute_plate_discipline_batter,
+                          build_split_table, build_hitting_monthly,
+                          spray_points, hitting_summary)
 from viz import pitching as vpitch
+from viz import hitting as vhit
+from viz.spray_render import render_spray_png
 
 warnings.filterwarnings("ignore")
 matplotlib.use("Agg")
@@ -770,92 +775,6 @@ def player_search_select(all_players, label, key):
 # ══════════════════════════════════════════════════════════════════════════════
 # ANALYTICS BUILDERS
 # ══════════════════════════════════════════════════════════════════════════════
-def build_play_result_table(df):
-    if "PlayResult" not in df.columns: return pd.DataFrame()
-    counts=df["PlayResult"].value_counts().reset_index()
-    counts.columns=["Result","Count"]
-    counts=counts[counts["Result"]!="—"]
-    pa=max(count_pa(df),1)                      # v4.2: real PA denominator
-    counts["% of PAs"]=counts["Count"].apply(lambda x:safe_pct(x,pa))
-    return counts.reset_index(drop=True)
-
-def compute_plate_discipline_batter(df):
-    """
-    Batter plate discipline (v4.2 fixes):
-      • Zone % / Chase % from true pitch location when available
-      • K % and BB % per PLATE APPEARANCE (not per pitch)
-      • BB counted from PlayResult (a called ball is NOT a walk)
-    """
-    if "PitchCall" not in df.columns: return {}
-    pc=df["PitchCall"].astype(str)
-    ZONE_CALLS={"StrikeCalled","StrikeSwinging","FoulBall","FoulBallFieldable","FoulBallNotFieldable","InPlay"}
-    n=len(df)
-    sw_m=pc.isin(SWING_CALLS); ct_m=pc.isin(CONTACT_CALLS)
-    sw,cont,whiff=int(sw_m.sum()),int(ct_m.sum()),int(pc.eq("StrikeSwinging").sum())
-    zone_m,has_loc=in_zone_mask(df)
-    if has_loc:
-        located=df["PlateLocSide"].notna()&df["PlateLocHeight"].notna()
-        in_z=int(zone_m.sum()); n_loc=int(located.sum())
-        oz=located&~zone_m
-        zone_pct=safe_pct(in_z,n_loc)
-        chase_pct=safe_pct(int((sw_m&oz).sum()),max(int(oz.sum()),1))
-    else:
-        in_z=int(pc.isin(ZONE_CALLS).sum())
-        zone_pct=safe_pct(in_z,n)
-        chase_pct=safe_pct(max(0,sw-cont),max(n-in_z,1))
-    pa=count_pa(df)
-    kk,bb=count_k_bb(df)
-    return {"Zone %":zone_pct, "Swing %":safe_pct(sw,n),
-            "Contact %":safe_pct(cont,max(sw,1)),
-            "Chase %":chase_pct,
-            "Whiff %":safe_pct(whiff,max(sw,1)),
-            "K %":safe_pct(kk,max(pa,1)), "BB %":safe_pct(bb,max(pa,1))}
-
-def build_split_table(df, split_col="PitcherThrows", ev_hard=95):
-    if split_col not in df.columns: return pd.DataFrame()
-    rows=[]
-    for hand,grp in df.groupby(split_col):
-        n=len(grp); r={"vs":hand,"Pitches":n,"PA":count_pa(grp)}
-        if "ExitSpeed" in grp.columns:
-            ev=grp["ExitSpeed"].dropna()
-            r["Avg EV"]=round(ev.mean(),1) if not ev.empty else np.nan
-            r["HH %"]=safe_pct((ev>=ev_hard).sum(),len(ev))
-        if "Angle" in grp.columns:
-            la=grp["Angle"].dropna()
-            r["Avg LA"]=round(la.mean(),1) if not la.empty else np.nan
-        disc=compute_plate_discipline_batter(grp)
-        r.update({k:v for k,v in disc.items()})
-        r["wOBA"]=compute_woba(grp)
-        rows.append(r)
-    return pd.DataFrame(rows).reset_index(drop=True)
-
-def build_hitting_monthly(df, lmeta=None):
-    ev_hard=(lmeta or {}).get("ev_hard",95)
-    barrel_base=(lmeta or {}).get("barrel_ev",98)
-    df=df.copy(); df["YearMonth"]=df["Date"].dt.to_period("M")
-    rows=[]
-    for period,grp in df.groupby("YearMonth"):
-        r={"Month":str(period),"Pitches":len(grp),"PA":count_pa(grp)}
-        for col,(mx,av) in [("ExitSpeed",("Max EV","Avg EV")),("Angle",("Max LA","Avg LA")),("Distance",("Max Dist","Avg Dist"))]:
-            if col in df.columns:
-                vals=grp[col].dropna()
-                r[mx]=round(vals.max(),1) if not vals.empty else np.nan
-                r[av]=round(vals.mean(),1) if not vals.empty else np.nan
-        bip=batted_ball_mask(grp)                     # v4.2: batted-ball denominator
-        n_bip=int(bip.sum())
-        if "ExitSpeed" in df.columns:
-            ev=grp.loc[bip,"ExitSpeed"].dropna()
-            r["HH %"]=safe_pct(int((ev>=ev_hard).sum()),max(len(ev),1))
-        if "ExitSpeed" in df.columns and "Angle" in df.columns:
-            barrels=int(barrel_mask(grp[bip],barrel_base).sum()) if n_bip else 0
-            r["Barrel %"]=safe_pct(barrels,max(n_bip,1))
-        kk,bb=count_k_bb(grp); pa=max(count_pa(grp),1)
-        r["K %"]=safe_pct(kk,pa); r["BB %"]=safe_pct(bb,pa)
-        r["wOBA"]=compute_woba(grp)
-        rows.append(r)
-    out=pd.DataFrame(rows)
-    return out.sort_values("Month",ascending=False).reset_index(drop=True) if not out.empty else out
-
 def build_league_pitching_avg(df):
     rows=[]
     for pt,grp in df.groupby("TaggedPitchType"):
@@ -893,188 +812,6 @@ def build_league_hitting_avg(df, lmeta=None):
     ]
     return pd.DataFrame(rows)
 
-# ══════════════════════════════════════════════════════════════════════════════
-# SAVANT-STYLE CHARTS
-# ══════════════════════════════════════════════════════════════════════════════
-
-def plot_spray_chart(df, name):
-    fig, ax = setup_savant_fig((6.5, 6.5))
-    # v4.2: guard against missing Distance/Bearing columns (was a KeyError)
-    if not {"Distance","Bearing"}.issubset(df.columns):
-        spray=pd.DataFrame()
-    else:
-        spray=df.dropna(subset=["Distance","Bearing"]).copy()
-    if spray.empty:
-        ax.text(.5,.5,"No spray data",ha="center",va="center",color=SAVANT_GREY,transform=ax.transAxes)
-        savant_title(ax,"Spray Chart",name); style_savant_ax(ax)
-        fig.tight_layout(); return fig
-    brad=np.deg2rad(spray["Bearing"])
-    spray["Hit_X"]=spray["Distance"]*np.sin(brad)
-    spray["Hit_Y"]=spray["Distance"]*np.cos(brad)
-    # ── v4.6 Campo minimalista estilo Savant: línea fina, fondo blanco ────
-    ax.grid(False)
-    LINE="#c9c9c9"
-    fence_t=np.linspace(-45,45,200)
-    fence_r=330+70*np.cos(np.deg2rad(fence_t*2))          # 330 líneas · 400 center
-    fx=fence_r*np.sin(np.deg2rad(fence_t)); fy=fence_r*np.cos(np.deg2rad(fence_t))
-    # tinte de pasto casi imperceptible
-    ax.fill(np.concatenate([[0],fx,[0]]),np.concatenate([[0],fy,[0]]),
-            color="#f4f8f2",zorder=0)
-    # barda + líneas de foul (trazo fino gris)
-    ax.plot(fx,fy,color=LINE,lw=1.8,zorder=1,solid_capstyle="round")
-    for sgn in (1,-1):
-        ax.plot([0,sgn*330*np.sin(np.deg2rad(45))],[0,330*np.cos(np.deg2rad(45))],
-                color=LINE,lw=1.4,zorder=1)
-    # diamante del infield + arco de tierra (solo contorno)
-    d=63.64
-    ax.plot([0,d,0,-d,0],[0,d,2*d,d,0],color=LINE,lw=1.2,zorder=1)
-    inf_t=np.linspace(-45,45,80)
-    ax.plot(95*np.sin(np.deg2rad(inf_t)),95*np.cos(np.deg2rad(inf_t)),
-            color="#e2e2e2",lw=1.0,zorder=1)
-    for bx,by in [(d,d),(0,2*d),(-d,d)]:
-        ax.add_patch(patches.Rectangle((bx-3,by-3),6,6,angle=45,
-                     facecolor="white",edgecolor=LINE,lw=0.9,zorder=2))
-    ax.add_patch(patches.Circle((0,60.5),9,facecolor="white",
-                 edgecolor="#e2e2e2",lw=1.0,zorder=1))
-    ax.add_patch(patches.Polygon([(-3.5,0),(3.5,0),(3.5,-3.5),(0,-7),(-3.5,-3.5)],
-                 closed=True,facecolor="white",ec=LINE,lw=0.9,zorder=2))
-    # referencia única de distancia al CF
-    ax.text(0,404,"400 ft",fontsize=7.5,color="#b5b5b5",ha="center",zorder=1)
-    has_ev="ExitSpeed" in spray.columns and spray["ExitSpeed"].notna().any()
-    sc=ax.scatter(spray["Hit_X"],spray["Hit_Y"],
-                  c=spray["ExitSpeed"] if has_ev else SAVANT_BLUE,
-                  cmap="coolwarm" if has_ev else None,
-                  s=48, alpha=0.85, edgecolors="white", linewidths=0.6,
-                  zorder=6, vmin=65, vmax=112, rasterized=True)
-    if has_ev:
-        cb=fig.colorbar(sc,ax=ax,pad=0.02,shrink=0.62)
-        cb.set_label("Exit Velocity (mph)", fontsize=8, color=SAVANT_TEXT)
-        cb.ax.tick_params(labelsize=8); cb.outline.set_visible(False)
-    ax.set_xlim(-340,340); ax.set_ylim(-25,430)
-    ax.axis("off")
-    savant_title(ax,"Spray Chart",name)
-    ax.set_aspect("equal",adjustable="box")
-    return fig
-
-def plot_ev_la_scatter(df, name):
-    fig, ax = setup_savant_fig((7, 5))
-    needed={"ExitSpeed","Angle"}
-    sub=df.dropna(subset=list(needed)).copy() if needed.issubset(df.columns) else pd.DataFrame()
-    if sub.empty:
-        ax.text(.5,.5,"No EV/LA data",ha="center",va="center",color=SAVANT_GREY,transform=ax.transAxes)
-        fig.tight_layout(); return fig
-    if "PlayResult" in sub.columns:
-        for res,color in RESULT_COLORS.items():
-            pts=sub[sub["PlayResult"]==res]
-            if len(pts):
-                ax.scatter(pts["ExitSpeed"],pts["Angle"],color=color,alpha=0.78,
-                           s=30,label=res,edgecolors="white",linewidths=0.5,zorder=5)
-        others=sub[~sub["PlayResult"].isin(RESULT_COLORS)]
-        if len(others):
-            ax.scatter(others["ExitSpeed"],others["Angle"],color="#cccccc",alpha=0.40,
-                       s=18,edgecolors="white",linewidths=0.3,zorder=3)
-    else:
-        ax.scatter(sub["ExitSpeed"],sub["Angle"],color=SAVANT_BLUE,alpha=0.60,
-                   s=30,edgecolors="white",linewidths=0.5,zorder=4)
-    # Barrel zone
-    ax.add_patch(patches.Rectangle((98,8),20,24,lw=1.8,edgecolor=SAVANT_ACCENT,
-                                   facecolor=SAVANT_ACCENT,alpha=0.06,linestyle="--",zorder=2))
-    ax.text(108.5,20,"BARREL",ha="center",va="center",color=SAVANT_ACCENT,fontsize=9,fontweight="bold",alpha=0.7)
-    ax.set_xlabel("Exit Velocity (mph)", fontsize=9); ax.set_ylabel("Launch Angle (°)", fontsize=9)
-    savant_title(ax,"Hit Quality Map — Exit Velo × Launch Angle",name)
-    style_savant_ax(ax)
-    ax.legend(fontsize=7.5,framealpha=0.6,edgecolor="none",facecolor="none",labelcolor=SAVANT_TEXT,loc="upper left")
-    return fig
-
-def plot_damage_zone(df, name):
-    fig, ax = setup_savant_fig((5.5, 6))
-    loc=df.dropna(subset=["PlateLocSide","PlateLocHeight"])
-    if not loc.empty:
-        has_ev="ExitSpeed" in loc.columns and loc["ExitSpeed"].notna().any()
-        sc=ax.scatter(loc["PlateLocSide"],loc["PlateLocHeight"],
-                      c=loc["ExitSpeed"] if has_ev else SAVANT_ACCENT,
-                      cmap="coolwarm" if has_ev else None,
-                      s=52,alpha=0.85,edgecolors="white",
-                      linewidths=0.7,zorder=6,vmin=65,vmax=112)
-        if has_ev:
-            cb=fig.colorbar(sc,ax=ax,pad=0.02,shrink=0.62)
-            cb.set_label("Exit Velocity (mph)", fontsize=8, color=SAVANT_TEXT)
-            cb.ax.tick_params(labelsize=8); cb.outline.set_visible(False)
-    else:
-        ax.text(.5,.5,"No location data",ha="center",va="center",color=SAVANT_GREY,transform=ax.transAxes)
-    draw_savant_zone(ax); draw_plate(ax)
-    style_zone_ax(ax)
-    savant_title(ax,"Damage Zone",f"{name} · dónde le pegan más duro")
-    return fig
-
-def plot_ev_distribution(df, name):
-    fig, ax = setup_savant_fig((7, 4))
-    ev=df["ExitSpeed"].dropna() if "ExitSpeed" in df.columns else pd.Series(dtype=float)
-    if ev.empty:
-        ax.text(.5,.5,"No EV data",ha="center",va="center",color=SAVANT_GREY,transform=ax.transAxes)
-        fig.tight_layout(); return fig
-    _,bins,patches_list=ax.hist(ev,bins=24,color=SAVANT_BLUE,alpha=0.72,
-                                 edgecolor="#ffffff",linewidth=0.6)
-    for p,left in zip(patches_list,bins[:-1]):
-        if left>=95: p.set_facecolor(SAVANT_RED); p.set_alpha(0.85)
-    ax.axvline(ev.mean(),color=SAVANT_TEXT,lw=1.6,linestyle="--",zorder=6,
-               label=f"Avg {ev.mean():.1f}")
-    ax.axvline(95,color=SAVANT_RED,lw=1.4,linestyle=":",zorder=6,label="Hard Hit (95)")
-    hh=(ev>=95).sum()
-    ax.text(0.97,0.93,f"HH: {hh} ({safe_pct(hh,len(ev))}%)",transform=ax.transAxes,
-            ha="right",va="top",color=SAVANT_RED,fontsize=9,fontweight="bold")
-    ax.set_xlabel("Exit Velocity (mph)", fontsize=9); ax.set_ylabel("Count", fontsize=9)
-    savant_title(ax,"Exit Velocity Distribution",name)
-    style_savant_ax(ax)
-    ax.legend(fontsize=8,framealpha=0.6,edgecolor="none",facecolor="none",labelcolor=SAVANT_TEXT)
-    return fig
-
-def plot_la_distribution(df, name):
-    fig, ax = setup_savant_fig((7, 4))
-    la=df["Angle"].dropna() if "Angle" in df.columns else pd.Series(dtype=float)
-    if la.empty:
-        ax.text(.5,.5,"No LA data",ha="center",va="center",color=SAVANT_GREY,transform=ax.transAxes)
-        fig.tight_layout(); return fig
-    _,bins,patches_list=ax.hist(la,bins=24,color=SAVANT_BLUE,alpha=0.72,
-                                 edgecolor="#ffffff",linewidth=0.6)
-    for p,left,right in zip(patches_list,bins[:-1],bins[1:]):
-        if left>=8 and right<=32: p.set_facecolor(SAVANT_GREEN); p.set_alpha(0.85)
-    ax.axvspan(8,32,alpha=0.07,color=SAVANT_GREEN,label="Barrel 8–32°",zorder=1)
-    ax.axvline(la.mean(),color=SAVANT_TEXT,lw=1.6,linestyle="--",zorder=6,
-               label=f"Avg {la.mean():.1f}°")
-    barrel=((la>=8)&(la<=32)).sum()
-    ax.text(0.97,0.93,f"Barrel: {barrel} ({safe_pct(barrel,len(la))}%)",transform=ax.transAxes,
-            ha="right",va="top",color=SAVANT_GREEN,fontsize=9,fontweight="bold")
-    ax.set_xlabel("Launch Angle (°)", fontsize=9); ax.set_ylabel("Count", fontsize=9)
-    savant_title(ax,"Launch Angle Distribution",name)
-    style_savant_ax(ax)
-    ax.legend(fontsize=8,framealpha=0.6,edgecolor="none",facecolor="none",labelcolor=SAVANT_TEXT)
-    return fig
-
-# ══════════════════════════════════════════════════════════════════════════════
-# NEW ANALYTICS v4.2 — usage by count, rolling EV, per-pitch heatmaps
-# ══════════════════════════════════════════════════════════════════════════════
-def plot_rolling_ev(df, name, window=15):
-    """Rolling exit-velocity trend over batted balls, chronological."""
-    fig, ax = setup_savant_fig((11, 3.8))
-    bip=df[batted_ball_mask(df)].dropna(subset=["ExitSpeed"]).copy()
-    if "Date" in bip.columns: bip=bip.sort_values("Date")
-    if len(bip)<5:
-        ax.text(.5,.5,"Need ≥ 5 batted balls",ha="center",va="center",
-                color=SAVANT_GREY,transform=ax.transAxes)
-        return fig
-    ev=bip["ExitSpeed"].reset_index(drop=True)
-    roll=ev.rolling(window,min_periods=max(3,window//3)).mean()
-    x=np.arange(1,len(ev)+1)
-    ax.scatter(x,ev,s=16,color=SAVANT_BLUE,alpha=0.35,edgecolors="none",zorder=3,label="Batted ball EV")
-    ax.plot(x,roll,color=SAVANT_RED,lw=2.2,zorder=5,label=f"Rolling avg ({window} BIP)")
-    ax.axhline(ev.mean(),color=SAVANT_GREY,lw=1.1,linestyle="--",zorder=2,label=f"Season avg {ev.mean():.1f}")
-    ax.set_xlabel("Batted ball # (chronological)",fontsize=9)
-    ax.set_ylabel("Exit Velocity (mph)",fontsize=9)
-    savant_title(ax,"Rolling Exit Velocity",name)
-    style_savant_ax(ax)
-    ax.legend(fontsize=8,framealpha=0.6,edgecolor="none",facecolor="none",labelcolor=SAVANT_TEXT)
-    return fig
 
 # ══════════════════════════════════════════════════════════════════════════════
 # TOP PLAYS v4.2 — leaderboards, quick questions & social-media cards
@@ -1643,34 +1380,21 @@ def render_hitting(df, master_df, lmeta):
             f"Hard Hit: ≥{lmeta['ev_hard']} mph · Elite EV: {lmeta['ev_elite']}+ mph · "
             f"{lmeta['barrel_note']}")
     EV_HARD  = lmeta['ev_hard']
-    EV_ELITE = lmeta['ev_elite']
     if "Batter" not in df.columns or df["Batter"].dropna().empty:
         st.error("No 'Batter' column."); return
     batters=sorted(df["Batter"].dropna().unique())
     selected=player_search_select(batters,"Select Batter","batter")
     bdf=df[df["Batter"]==selected].copy(); n=len(bdf)
     if n<15: st.warning(f"⚠️ **{selected}** — only **{n}** pitches (min: 15).")
-    barrel_base=lmeta.get("barrel_ev",98)
-    bip=batted_ball_mask(bdf); n_bip=int(bip.sum())
-    avg_ev=bdf.loc[bip,"ExitSpeed"].mean() if "ExitSpeed" in bdf.columns else np.nan
-    max_ev=bdf.loc[bip,"ExitSpeed"].max() if "ExitSpeed" in bdf.columns else np.nan
-    avg_la=bdf.loc[bip,"Angle"].mean() if "Angle" in bdf.columns else np.nan
-    hh_rate=barrel_rate=0.0
-    if "ExitSpeed" in bdf.columns:
-        ev_s=bdf.loc[bip,"ExitSpeed"].dropna()
-        hh_rate=safe_pct(int((ev_s>=EV_HARD).sum()),max(len(ev_s),1))
-    if "ExitSpeed" in bdf.columns and "Angle" in bdf.columns and n_bip:
-        # v4.2: dynamic Savant barrel over batted balls (not all pitches)
-        barrel_rate=safe_pct(int(barrel_mask(bdf[bip],barrel_base).sum()),n_bip)
+    summ=hitting_summary(bdf,lmeta)
     disc=compute_plate_discipline_batter(bdf)
-    pa=count_pa(bdf); woba=compute_woba(bdf)
     c1,c2,c3,c4,c5,c6,c7=st.columns(7)
-    with c1: st.metric("Pitches",f"{n:,}",delta=f"{pa} PA" if pa else None,delta_color="off")
-    with c2: st.metric("Avg EV",fmt(avg_ev," mph"),delta=f"Max {max_ev:.1f}" if not (isinstance(max_ev,float) and np.isnan(max_ev)) else None)
-    with c3: st.metric("Avg LA",fmt(avg_la,"°"))
-    with c4: st.metric("HH %",f"{hh_rate:.1f}%")
-    with c5: st.metric("Barrel %",f"{barrel_rate:.1f}%")
-    with c6: st.metric("wOBA",fmt(woba,"",3))
+    with c1: st.metric("Pitches",f"{summ['n']:,}",delta=f"{summ['pa']} PA" if summ['pa'] else None,delta_color="off")
+    with c2: st.metric("Avg EV",fmt(summ['avg_ev']," mph"),delta=f"Max {summ['max_ev']:.1f}" if summ['max_ev'] is not None else None)
+    with c3: st.metric("Avg LA",fmt(summ['avg_la'],"°"))
+    with c4: st.metric("HH %",f"{summ['hh_pct']:.1f}%")
+    with c5: st.metric("Barrel %",f"{summ['barrel_pct']:.1f}%")
+    with c6: st.metric("wOBA",fmt(summ['woba'],"",3))
     with c7: st.metric("Dates",str(bdf["Date"].dt.date.nunique()) if "Date" in bdf.columns else "—")
     st.markdown("<br>",unsafe_allow_html=True)
     if disc:
@@ -1698,8 +1422,7 @@ def render_hitting(df, master_df, lmeta):
             st.dataframe(monthly_df,use_container_width=True,hide_index=True)
             csv_dl(monthly_df,f"{selected}_monthly.csv")
         st.markdown("<br>",unsafe_allow_html=True)
-        fig_roll=plot_rolling_ev(bdf,selected)
-        st.pyplot(fig_roll,use_container_width=True); plt.close(fig_roll)
+        st.plotly_chart(vhit.rolling_ev(bdf,selected),use_container_width=True)
     with tab2:
         st.markdown('<div class="sh">vs RHP / LHP</div>',unsafe_allow_html=True)
         split_df=build_split_table(bdf,ev_hard=EV_HARD)
@@ -1714,8 +1437,10 @@ def render_hitting(df, master_df, lmeta):
                 for col_h,hand in zip(cols_h,sorted(hands)):
                     with col_h:
                         sub_h=bdf[bdf["PitcherThrows"]==hand]
-                        fig_h=plot_spray_chart(sub_h,f"{selected} vs {hand}")
-                        st.pyplot(fig_h,use_container_width=True); plt.close(fig_h)
+                        png_h=render_spray_png(spray_points(sub_h),hitting_summary(sub_h,lmeta),
+                                               f"{selected} vs {hand}",color_by="ev")
+                        if png_h: st.image(png_h,use_container_width=True)
+                        else: st.info("Sin datos de spray.")
     with tab3:
         st.markdown('<div class="sh">Play Results</div>',unsafe_allow_html=True)
         result_df=build_play_result_table(bdf)
@@ -1724,36 +1449,45 @@ def render_hitting(df, master_df, lmeta):
             st.dataframe(result_df,use_container_width=True,hide_index=True)
             csv_dl(result_df,f"{selected}_results.csv")
     with tab4:
-        cl,cr=st.columns(2)
-        fig_spray=plot_spray_chart(bdf,selected)
-        fig_dmg=plot_damage_zone(bdf,selected)
-        with cl: st.pyplot(fig_spray,use_container_width=True)
-        with cr: st.pyplot(fig_dmg,use_container_width=True)
+        cv1,cv2=st.columns(2)
+        with cv1: sv=st.radio("Vista",["🖼️ Pro","🔍 Interactivo"],key="hit_spray_view",horizontal=True)
+        with cv2: sc=st.radio("Color",["Exit Velocity","Resultado"],key="hit_spray_color",horizontal=True)
+        cb="ev" if sc=="Exit Velocity" else "result"
+        pts=spray_points(bdf)
+        if sv=="🖼️ Pro":
+            png=render_spray_png(pts,summ,selected,color_by=cb)
+            if png: st.image(png,use_container_width=True)
+            else: st.info("Sin datos de spray (Distance/Bearing).")
+        else:
+            st.plotly_chart(vhit.spray_interactive(pts,selected,color_by=cb),use_container_width=True)
+        st.markdown('<div class="sh">Damage Zone</div>',unsafe_allow_html=True)
+        st.plotly_chart(vhit.damage_zone(bdf,selected),use_container_width=True)
     with tab5:
         cl2,cr2=st.columns(2)
-        fig_ev=plot_ev_distribution(bdf,selected)
-        fig_la=plot_la_distribution(bdf,selected)
-        with cl2: st.pyplot(fig_ev,use_container_width=True)
-        with cr2: st.pyplot(fig_la,use_container_width=True)
+        with cl2: st.plotly_chart(vhit.ev_distribution(bdf,selected),use_container_width=True)
+        with cr2: st.plotly_chart(vhit.la_distribution(bdf,selected),use_container_width=True)
         st.markdown("<br>",unsafe_allow_html=True)
-        fig_ev_la=plot_ev_la_scatter(bdf,selected)
-        st.pyplot(fig_ev_la,use_container_width=True)
+        st.plotly_chart(vhit.ev_la_scatter(bdf,selected),use_container_width=True)
     with tab6:
         st.info("Stadium analysis coming soon.")
     st.markdown('<div class="sh">📤 Export</div>',unsafe_allow_html=True)
     dr=f"{df['Date'].min().date()}→{df['Date'].max().date()}" if df["Date"].notna().any() else "All dates"
     ec1,ec2=st.columns(2)
     with ec1:
-        # v4.2: PDF built only on demand — avoids regenerating on every rerun
+        # PDF built only on demand — figuras Plotly (vía _fig_to_img/kaleido)
         if st.button("📄 Build PDF Report",key="btn_pdf_hit"):
             with st.spinner("Building PDF…"):
+                fig_spray=vhit.spray_interactive(spray_points(bdf),selected,color_by="ev")
+                fig_dmg=vhit.damage_zone(bdf,selected)
+                fig_ev=vhit.ev_distribution(bdf,selected)
+                fig_la=vhit.la_distribution(bdf,selected)
+                fig_ev_la=vhit.ev_la_scatter(bdf,selected)
                 pdf_b=export_hitting_pdf(selected,monthly_df,disc,result_df,split_df,
                                           fig_spray,fig_dmg,fig_ev,fig_la,fig_ev_la,dr)
             st.download_button("⬇️ Download PDF",pdf_b,f"{selected}_hitting.pdf",
                                "application/pdf",key="dl_pdf_hit")
     with ec2:
         csv_dl(bdf,f"{selected}_raw.csv","⬇️ Raw CSV")
-    for f in [fig_spray,fig_dmg,fig_ev,fig_la,fig_ev_la]: plt.close(f)
 
 # ══════════════════════════════════════════════════════════════════════════════
 # RENDER: LEAGUE & STADIUM

@@ -55,6 +55,17 @@ El selector Pro / College / High School / Mixed ajusta todos los umbrales (Hard 
 
 Paquete independiente con motor físico de trayectorias release→plato, validación de rangos físicos, analítica (movement profile, release consistency, tendencias velo/spin) y API Flask documentada para integraciones externas. Ver `trajectory/README.md`. En el app: modo **🎯 Trayectorias 3D** con vista animada detrás del catcher (play/pausa + slider de frames), superposición de pitches, comparación de dos pitchers lado a lado, heatmaps por tipo y conteo, break chart, consistencia de release y tendencias por outing. Export: HTML interactivo y GIF vista-catcher. Tests: `pytest trajectory/tests/` (18 tests).
 
+## Changelog v4.12
+
+- 🏏 **Modo Hitting al nivel de Pitching.** Analítica extraída a `core/hitting.py` (pura) y gráficos
+  a `viz/hitting.py` (**Plotly interactivo**): EV/LA distributions, EV×LA hit-quality map, damage
+  zone, rolling EV — con hover/zoom.
+- 🗺️ **Spray chart broadcast** (`viz/spray_render.py`): campo **top-down de día foto-realista**
+  (pasto con franjas de corte, tierra, warning track, barda, bases) con dos toggles — **Pro**
+  (matplotlib foto-realista) / **Interactivo** (Plotly con hover) y **Exit Velocity** / **Resultado**.
+  Panel BATTED BALL PROFILE (Avg/Max EV, LA, HH%, Barrel%, wOBA) al lado.
+- 🖨️ PDF de Hitting unificado a Plotly (vía kaleido). Se retiraron los gráficos matplotlib viejos.
+
 ## Changelog v4.11
 
 - 🌃 **Modo Trayectorias 3D con look "Statcast broadcast" de noche.** Escena realista
