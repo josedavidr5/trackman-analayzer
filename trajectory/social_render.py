@@ -303,34 +303,32 @@ def _header(ax, title, sub):
             path_effects=[matplotlib.patheffects.withStroke(linewidth=2.5, foreground="#00000066")])
 
 
-def _draw_side_panel(ax, title, entries, active_idx=None):
-    """Panel lateral persistente estilo broadcast PITCH ARSENAL (rojo), con el pitcheo
-    activo resaltado. entries: [(color, label, velo_str)]."""
+def _draw_side_panel(ax, title, entries):
+    """Panel lateral FIJO estilo broadcast PITCH ARSENAL (rojo). Idéntico en cada frame.
+    entries: [(color, label, velo_str, detail_str)] — dos líneas por pitcheo."""
     n = len(entries)
-    row_h = min(0.088, 0.60 / max(n, 1))
-    px0, pw = 0.022, 0.30
+    row_h = min(0.118, 0.68 / max(n, 1))
+    px0, pw = 0.022, 0.35
     py1 = 0.955
-    ph = 0.10 + n * row_h
+    ph = 0.108 + n * row_h
     py0 = py1 - ph
     ax.add_patch(FancyBboxPatch((px0, py0), pw, ph, transform=ax.transAxes,
                  boxstyle="round,pad=0.006", facecolor="#8e0e24f0",
                  edgecolor="#ffffff2e", lw=1.2, zorder=30))
     ax.text(px0 + 0.018, py1 - 0.028, title, transform=ax.transAxes, fontsize=15,
             fontweight="bold", color="#ffffff", va="top", zorder=31)
-    ax.text(px0 + 0.018, py1 - 0.072, "PITCH ARSENAL", transform=ax.transAxes,
+    ax.text(px0 + 0.018, py1 - 0.07, "PITCH ARSENAL", transform=ax.transAxes,
             fontsize=8, color="#ffffffcc", va="top", zorder=31)
-    for i, (col, lbl, velo) in enumerate(entries):
-        y = py1 - 0.108 - i * row_h - row_h * 0.5
-        if active_idx == i:
-            ax.add_patch(Rectangle((px0 + 0.006, y - row_h * 0.44), pw - 0.012, row_h * 0.88,
-                         transform=ax.transAxes, facecolor="#ffffff26",
-                         edgecolor="none", zorder=30.5))
-        ax.add_patch(Circle((px0 + 0.03, y), 0.0115, transform=ax.transAxes,
-                     facecolor="#ffffff", edgecolor=col, lw=3.2, zorder=31))
-        ax.text(px0 + 0.058, y, str(lbl).upper(), transform=ax.transAxes, fontsize=10.5,
+    for i, (col, lbl, velo, detail) in enumerate(entries):
+        yt = py1 - 0.108 - i * row_h - row_h * 0.30
+        ax.add_patch(Circle((px0 + 0.028, yt), 0.0105, transform=ax.transAxes,
+                     facecolor="#ffffff", edgecolor=col, lw=3.0, zorder=31))
+        ax.text(px0 + 0.052, yt, str(lbl).upper(), transform=ax.transAxes, fontsize=10.5,
                 fontweight="bold", color="#ffffff", va="center", zorder=31)
-        ax.text(px0 + pw - 0.018, y, velo, transform=ax.transAxes, fontsize=9.5,
-                color="#ffffffe0", va="center", ha="right", zorder=31)
+        ax.text(px0 + pw - 0.016, yt, velo, transform=ax.transAxes, fontsize=9.5,
+                color="#ffffffe6", va="center", ha="right", zorder=31)
+        ax.text(px0 + 0.052, yt - row_h * 0.40, detail, transform=ax.transAxes, fontsize=7.5,
+                color="#f4ccd4", va="center", zorder=31)
 
 
 def render_social_gif(rows: pd.DataFrame, pitcher: str = "", fps: int = 30,
@@ -368,7 +366,14 @@ def render_social_gif(rows: pd.DataFrame, pitcher: str = "", fps: int = 30,
     frames = []      # [(PIL.Image, duración_ms)] — frames únicos con duración propia
     FRAME_MS = int(1000/fps)
 
-    entries = [(p["color"], p["label"], _fmt(p["row"].get("RelSpeed"), " mph")) for p in pitches]
+    _inch = '"'
+    def _pentry(p):
+        r, met = p["row"], p["metrics"]
+        ivb = r.get("InducedVertBreak", r.get("VertBreak"))
+        det = (f"{_fmt(r.get('SpinRate'), ' rpm', 0)} · IVB {_fmt(ivb, _inch)} · "
+               f"HB {_fmt(r.get('HorzBreak'), _inch)}")
+        return (p["color"], p["label"], _fmt(r.get("RelSpeed"), " mph"), det)
+    entries = [_pentry(p) for p in pitches]
     landed = []   # [(u,v,color,texto)]
     for pi, p in enumerate(pitches):
         row, path, met = p["row"], p["path"], p["metrics"]
@@ -384,7 +389,7 @@ def render_social_gif(rows: pd.DataFrame, pitcher: str = "", fps: int = 30,
         prev_uv = None
         for k in range(travel_frames):
             fig, ax = _new_canvas(bg)
-            _draw_side_panel(ax, title, entries, active_idx=pi)
+            _draw_side_panel(ax, title, entries)
             # marcadores de pitches anteriores
             for (lu, lv, lc, _txt) in landed:
                 ax.add_patch(Circle((lu, lv), 0.14, fill=False,
@@ -427,7 +432,7 @@ def render_social_gif(rows: pd.DataFrame, pitcher: str = "", fps: int = 30,
 
     # ── frame final: todos los pitcheos aterrizados, con el panel al lado ──
     fig, ax = _new_canvas(bg)
-    _draw_side_panel(ax, title, entries, active_idx=None)
+    _draw_side_panel(ax, title, entries)
     for (lu, lv, lc, _txt) in landed:
         ax.add_patch(Circle((lu, lv), 0.14, fill=False,
                             edgecolor=lc, lw=2.6, alpha=0.95, zorder=7))
