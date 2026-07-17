@@ -331,6 +331,22 @@ def viz_card(eyebrow, title, desc=""):
                     + (f'<div class="viz-desc">{desc}</div>' if desc else ""),
                     unsafe_allow_html=True)
     return c
+def bb_panel_html(name, summ):
+    """Panel 'BATTED BALL PROFILE' (rojo broadcast) para mostrar junto al spray, no encima."""
+    rows=[("Avg EV",fmt(summ.get("avg_ev")," mph")),("Max EV",fmt(summ.get("max_ev")," mph")),
+          ("Avg LA",fmt(summ.get("avg_la"),"°")),("HH %",fmt(summ.get("hh_pct"),"%")),
+          ("Barrel %",fmt(summ.get("barrel_pct"),"%")),("wOBA",fmt(summ.get("woba"),"",3))]
+    items="".join(f'<div style="display:flex;justify-content:space-between;gap:8px;'
+                  f'padding:6px 0;border-bottom:1px solid rgba(255,255,255,.14)">'
+                  f'<span style="font-weight:700;font-size:.72rem;letter-spacing:.04em;'
+                  f'text-transform:uppercase">{k}</span>'
+                  f'<span style="font-weight:800;font-size:.85rem">{v}</span></div>' for k,v in rows)
+    return (f'<div style="background:linear-gradient(165deg,#b5122e,#8e0e24);border-radius:10px;'
+            f'color:#fff;padding:12px 14px;box-shadow:0 6px 18px rgba(0,0,0,.25)">'
+            f'<div style="font-size:1.02rem;font-weight:800">{name}</div>'
+            f'<div style="font-size:.58rem;letter-spacing:.2em;opacity:.85;margin-bottom:6px;'
+            f'border-bottom:2px solid rgba(255,255,255,.3);padding-bottom:5px">BATTED BALL PROFILE</div>'
+            f'{items}</div>')
 
 # ══════════════════════════════════════════════════════════════════════════════
 # NAME NORMALISATION (unchanged from v4)
@@ -1453,8 +1469,7 @@ def render_hitting(df, master_df, lmeta):
                 for col_h,hand in zip(cols_h,sorted(hands)):
                     with col_h:
                         sub_h=bdf[bdf["PitcherThrows"]==hand]
-                        png_h=render_spray_png(spray_points(sub_h),hitting_summary(sub_h,lmeta),
-                                               f"{selected} vs {hand}",color_by="ev")
+                        png_h=render_spray_png(spray_points(sub_h),f"{selected} vs {hand}",color_by="ev")
                         if png_h: st.image(png_h,use_container_width=True)
                         else: st.info("Sin datos de spray.")
     with tab3:
@@ -1472,8 +1487,11 @@ def render_hitting(df, master_df, lmeta):
             cb="ev" if sc=="Exit Velocity" else "result"
             pts=spray_points(bdf)
             if sv=="🖼️ Pro":
-                png=render_spray_png(pts,summ,selected,color_by=cb)
-                if png: st.image(png,use_container_width=True)
+                png=render_spray_png(pts,selected,color_by=cb)
+                if png:
+                    pcol,scol=st.columns([1,3.2])
+                    with pcol: st.markdown(bb_panel_html(selected,summ),unsafe_allow_html=True)
+                    with scol: st.image(png,use_container_width=True)
                 else: st.info("Sin datos de spray (Distance/Bearing).")
             else:
                 st.plotly_chart(vhit.spray_interactive(pts,selected,color_by=cb),use_container_width=True)
