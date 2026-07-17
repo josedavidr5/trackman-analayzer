@@ -55,6 +55,15 @@ El selector Pro / College / High School / Mixed ajusta todos los umbrales (Hard 
 
 Paquete independiente con motor físico de trayectorias release→plato, validación de rangos físicos, analítica (movement profile, release consistency, tendencias velo/spin) y API Flask documentada para integraciones externas. Ver `trajectory/README.md`. En el app: modo **🎯 Trayectorias 3D** con vista animada detrás del catcher (play/pausa + slider de frames), superposición de pitches, comparación de dos pitchers lado a lado, heatmaps por tipo y conteo, break chart, consistencia de release y tendencias por outing. Export: HTML interactivo y GIF vista-catcher. Tests: `pytest trajectory/tests/` (18 tests).
 
+## Changelog v4.13
+
+- 🎨 **Tema fijado a claro** (`.streamlit/config.toml`): la app ya no sigue el modo del sistema del
+  visitante (que descuadraba los gráficos y el CSS en modo oscuro). Producción se ve siempre como el diseño.
+- 🃏 **Presentación de Hitting en tarjetas**: helper `viz_card` (`st.container(border=True)` + CSS)
+  envuelve cada gráfico/tabla con etiqueta + título + descripción (estilo preview).
+- 🗺️ **Spray Pro con fondo claro** y el panel **BATTED BALL PROFILE** movido a un lado (HTML), ya no
+  encima de los batazos — el campo queda limpio.
+
 ## Changelog v4.12
 
 - 🏏 **Modo Hitting al nivel de Pitching.** Analítica extraída a `core/hitting.py` (pura) y gráficos
