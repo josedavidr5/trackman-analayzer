@@ -182,6 +182,11 @@ div[data-testid="stDataFrame"]{border:1px solid #e0e0e0;border-radius:4px;overfl
   text-align:center;min-width:75px;background:#fafafa}
 .stat-badge .val{font-size:1.4rem;font-weight:700;color:#1f77b4;line-height:1}
 .stat-badge .lbl{font-size:.6rem;letter-spacing:.05em;text-transform:uppercase;opacity:.5;margin-top:2px}
+.viz-eyebrow{font-family:ui-monospace,"SF Mono",Menlo,Consolas,monospace;font-size:.62rem;
+  letter-spacing:.18em;text-transform:uppercase;color:#1f77b4;font-weight:700;margin-bottom:2px}
+.viz-title{font-size:1.05rem;font-weight:800;letter-spacing:-.01em;line-height:1.2;
+  margin-bottom:3px;color:#222}
+.viz-desc{font-size:.82rem;color:#5b6b78;line-height:1.45;margin-bottom:8px}
 </style>""",unsafe_allow_html=True)
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -316,6 +321,16 @@ def csv_dl(df, fname, label="⬇️ Download CSV"):
 def fmt(v, suffix="", decimals=1):
     if v is None or (isinstance(v, float) and np.isnan(v)): return "—"
     return f"{v:.{decimals}f}{suffix}"
+def viz_card(eyebrow, title, desc=""):
+    """Container con borde + cabecera (etiqueta/título/descripción) estilo preview.
+    Uso:  with viz_card("EYEBROW","Título","desc"): st.plotly_chart(fig, ...)"""
+    c = st.container(border=True)
+    with c:
+        st.markdown(f'<div class="viz-eyebrow">{eyebrow}</div>'
+                    f'<div class="viz-title">{title}</div>'
+                    + (f'<div class="viz-desc">{desc}</div>' if desc else ""),
+                    unsafe_allow_html=True)
+    return c
 
 # ══════════════════════════════════════════════════════════════════════════════
 # NAME NORMALISATION (unchanged from v4)
