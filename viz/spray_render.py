@@ -18,15 +18,11 @@ def _fence_xy(n=240):
     return r * np.sin(np.deg2rad(t)), r * np.cos(np.deg2rad(t)), t, r
 
 
-def _f(v, suf="", dec=1):
-    return "—" if v is None else f"{v:.{dec}f}{suf}"
-
-
-def render_spray_png(points, summary, name, color_by="ev"):
+def render_spray_png(points, name="", color_by="ev"):
     pts = points.get("points", []) if points else []
     if not pts:
         return None
-    fig = plt.figure(figsize=(9.5, 8.2), dpi=120)
+    fig = plt.figure(figsize=(8.6, 7.4), dpi=120)
     ax = fig.add_axes([0.0, 0.0, 1.0, 1.0]); ax.set_axis_off()
     ax.set_xlim(-360, 360); ax.set_ylim(-40, 440); ax.set_aspect("equal")
     fx, fy, ft, fr = _fence_xy()
@@ -75,26 +71,7 @@ def render_spray_png(points, summary, name, color_by="ev"):
                         edgecolors="white", linewidths=0.8, zorder=7)
         cb = fig.colorbar(sc, ax=ax, pad=0.01, shrink=0.5)
         cb.set_label("Exit Velocity (mph)", fontsize=9); cb.outline.set_visible(False)
-    ax.text(0, 415, "400 ft", fontsize=8, color="#eef3ee", ha="center", zorder=6)
-    # panel de bateo (arriba-izquierda)
-    s = summary or {}
-    rows = [("Avg EV", _f(s.get("avg_ev"), " mph")), ("Max EV", _f(s.get("max_ev"), " mph")),
-            ("Avg LA", _f(s.get("avg_la"), "°")), ("HH %", _f(s.get("hh_pct"), "%")),
-            ("Barrel %", _f(s.get("barrel_pct"), "%")), ("wOBA", _f(s.get("woba"), "", 3))]
-    ph = 0.052 * len(rows) + 0.10
-    ax.add_patch(mp.FancyBboxPatch((0.015, 0.965 - ph), 0.30, ph, transform=ax.transAxes,
-                 boxstyle="round,pad=0.008", facecolor="#8e0e24f0", edgecolor="#ffffff33",
-                 lw=1.2, zorder=20))
-    ax.text(0.03, 0.95, name, transform=ax.transAxes, fontsize=15, fontweight="bold",
-            color="#fff", va="top", zorder=21)
-    ax.text(0.03, 0.915, "BATTED BALL PROFILE", transform=ax.transAxes, fontsize=8,
-            color="#ffffffcc", va="top", zorder=21)
-    for i, (k, v) in enumerate(rows):
-        y = 0.885 - i * 0.05
-        ax.text(0.03, y, k.upper(), transform=ax.transAxes, fontsize=9.5, fontweight="bold",
-                color="#fff", va="center", zorder=21)
-        ax.text(0.30, y, v, transform=ax.transAxes, fontsize=9.5, color="#ffffffe6",
-                va="center", ha="right", zorder=21)
-    buf = io.BytesIO(); fig.savefig(buf, format="png", facecolor="#0e1a12")
+    ax.text(0, 415, "400 ft", fontsize=8, color="#7a8a99", ha="center", zorder=6)
+    buf = io.BytesIO(); fig.savefig(buf, format="png", facecolor="#ffffff")
     plt.close(fig); buf.seek(0)
     return buf.getvalue()

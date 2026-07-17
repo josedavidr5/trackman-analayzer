@@ -182,6 +182,11 @@ div[data-testid="stDataFrame"]{border:1px solid #e0e0e0;border-radius:4px;overfl
   text-align:center;min-width:75px;background:#fafafa}
 .stat-badge .val{font-size:1.4rem;font-weight:700;color:#1f77b4;line-height:1}
 .stat-badge .lbl{font-size:.6rem;letter-spacing:.05em;text-transform:uppercase;opacity:.5;margin-top:2px}
+.viz-eyebrow{font-family:ui-monospace,"SF Mono",Menlo,Consolas,monospace;font-size:.62rem;
+  letter-spacing:.18em;text-transform:uppercase;color:#1f77b4;font-weight:700;margin-bottom:2px}
+.viz-title{font-size:1.05rem;font-weight:800;letter-spacing:-.01em;line-height:1.2;
+  margin-bottom:3px;color:#222}
+.viz-desc{font-size:.82rem;color:#5b6b78;line-height:1.45;margin-bottom:8px}
 </style>""",unsafe_allow_html=True)
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -316,6 +321,32 @@ def csv_dl(df, fname, label="⬇️ Download CSV"):
 def fmt(v, suffix="", decimals=1):
     if v is None or (isinstance(v, float) and np.isnan(v)): return "—"
     return f"{v:.{decimals}f}{suffix}"
+def viz_card(eyebrow, title, desc=""):
+    """Container con borde + cabecera (etiqueta/título/descripción) estilo preview.
+    Uso:  with viz_card("EYEBROW","Título","desc"): st.plotly_chart(fig, ...)"""
+    c = st.container(border=True)
+    with c:
+        st.markdown(f'<div class="viz-eyebrow">{eyebrow}</div>'
+                    f'<div class="viz-title">{title}</div>'
+                    + (f'<div class="viz-desc">{desc}</div>' if desc else ""),
+                    unsafe_allow_html=True)
+    return c
+def bb_panel_html(name, summ):
+    """Panel 'BATTED BALL PROFILE' (rojo broadcast) para mostrar junto al spray, no encima."""
+    rows=[("Avg EV",fmt(summ.get("avg_ev")," mph")),("Max EV",fmt(summ.get("max_ev")," mph")),
+          ("Avg LA",fmt(summ.get("avg_la"),"°")),("HH %",fmt(summ.get("hh_pct"),"%")),
+          ("Barrel %",fmt(summ.get("barrel_pct"),"%")),("wOBA",fmt(summ.get("woba"),"",3))]
+    items="".join(f'<div style="display:flex;justify-content:space-between;gap:8px;'
+                  f'padding:6px 0;border-bottom:1px solid rgba(255,255,255,.14)">'
+                  f'<span style="font-weight:700;font-size:.72rem;letter-spacing:.04em;'
+                  f'text-transform:uppercase">{k}</span>'
+                  f'<span style="font-weight:800;font-size:.85rem">{v}</span></div>' for k,v in rows)
+    return (f'<div style="background:linear-gradient(165deg,#b5122e,#8e0e24);border-radius:10px;'
+            f'color:#fff;padding:12px 14px;box-shadow:0 6px 18px rgba(0,0,0,.25)">'
+            f'<div style="font-size:1.02rem;font-weight:800">{name}</div>'
+            f'<div style="font-size:.58rem;letter-spacing:.2em;opacity:.85;margin-bottom:6px;'
+            f'border-bottom:2px solid rgba(255,255,255,.3);padding-bottom:5px">BATTED BALL PROFILE</div>'
+            f'{items}</div>')
 
 # ══════════════════════════════════════════════════════════════════════════════
 # NAME NORMALISATION (unchanged from v4)
@@ -1417,57 +1448,65 @@ def render_hitting(df, master_df, lmeta):
         "📅 Monthly","🔄 Splits","📋 Results","🗺️ Spray","📊 Distributions","🏟️ Stadium"])
     with tab1:
         monthly_df=build_hitting_monthly(bdf,lmeta)
-        if monthly_df.empty: st.info("No monthly data.")
-        else:
-            st.dataframe(monthly_df,use_container_width=True,hide_index=True)
-            csv_dl(monthly_df,f"{selected}_monthly.csv")
-        st.markdown("<br>",unsafe_allow_html=True)
-        st.plotly_chart(vhit.rolling_ev(bdf,selected),use_container_width=True)
+        with viz_card("PROGRESIÓN MENSUAL","Mes a mes","EV/LA/distancia, HH%, Barrel%, K/BB y wOBA por mes."):
+            if monthly_df.empty: st.info("No monthly data.")
+            else:
+                st.dataframe(monthly_df,use_container_width=True,hide_index=True)
+                csv_dl(monthly_df,f"{selected}_monthly.csv")
+        with viz_card("ROLLING EV","Tendencia de Exit Velocity","Media móvil de EV por batazo (cronológico)."):
+            st.plotly_chart(vhit.rolling_ev(bdf,selected),use_container_width=True)
     with tab2:
-        st.markdown('<div class="sh">vs RHP / LHP</div>',unsafe_allow_html=True)
         split_df=build_split_table(bdf,ev_hard=EV_HARD)
-        if split_df.empty: st.info("PitcherThrows column required.")
-        else:
-            st.dataframe(split_df,use_container_width=True,hide_index=True)
-            csv_dl(split_df,f"{selected}_splits.csv")
-            hands=bdf["PitcherThrows"].dropna().unique() if "PitcherThrows" in bdf.columns else []
-            if len(hands)>=2:
-                st.markdown('<div class="sh">Spray by Pitcher Hand</div>',unsafe_allow_html=True)
+        with viz_card("SPLITS vs RHP/LHP","Rendimiento por mano del pitcher","EV, HH%, disciplina y wOBA vs derechos e izquierdos."):
+            if split_df.empty: st.info("PitcherThrows column required.")
+            else:
+                st.dataframe(split_df,use_container_width=True,hide_index=True)
+                csv_dl(split_df,f"{selected}_splits.csv")
+        hands=bdf["PitcherThrows"].dropna().unique() if "PitcherThrows" in bdf.columns else []
+        if len(hands)>=2:
+            with viz_card("SPRAY POR MANO","Dónde caen los batazos por mano","Spray chart contra cada mano del pitcher."):
                 cols_h=st.columns(len(hands))
                 for col_h,hand in zip(cols_h,sorted(hands)):
                     with col_h:
                         sub_h=bdf[bdf["PitcherThrows"]==hand]
-                        png_h=render_spray_png(spray_points(sub_h),hitting_summary(sub_h,lmeta),
-                                               f"{selected} vs {hand}",color_by="ev")
+                        png_h=render_spray_png(spray_points(sub_h),f"{selected} vs {hand}",color_by="ev")
                         if png_h: st.image(png_h,use_container_width=True)
                         else: st.info("Sin datos de spray.")
     with tab3:
-        st.markdown('<div class="sh">Play Results</div>',unsafe_allow_html=True)
         result_df=build_play_result_table(bdf)
-        if result_df.empty: st.info("PlayResult column not found.")
-        else:
-            st.dataframe(result_df,use_container_width=True,hide_index=True)
-            csv_dl(result_df,f"{selected}_results.csv")
+        with viz_card("RESULTADOS DE JUGADA","Distribución de resultados","Conteo y % de PAs por resultado."):
+            if result_df.empty: st.info("PlayResult column not found.")
+            else:
+                st.dataframe(result_df,use_container_width=True,hide_index=True)
+                csv_dl(result_df,f"{selected}_results.csv")
     with tab4:
-        cv1,cv2=st.columns(2)
-        with cv1: sv=st.radio("Vista",["🖼️ Pro","🔍 Interactivo"],key="hit_spray_view",horizontal=True)
-        with cv2: sc=st.radio("Color",["Exit Velocity","Resultado"],key="hit_spray_color",horizontal=True)
-        cb="ev" if sc=="Exit Velocity" else "result"
-        pts=spray_points(bdf)
-        if sv=="🖼️ Pro":
-            png=render_spray_png(pts,summ,selected,color_by=cb)
-            if png: st.image(png,use_container_width=True)
-            else: st.info("Sin datos de spray (Distance/Bearing).")
-        else:
-            st.plotly_chart(vhit.spray_interactive(pts,selected,color_by=cb),use_container_width=True)
-        st.markdown('<div class="sh">Damage Zone</div>',unsafe_allow_html=True)
-        st.plotly_chart(vhit.damage_zone(bdf,selected),use_container_width=True)
+        with viz_card("SPRAY CHART","Dónde caen los batazos","Campo top-down; toggle Pro/Interactivo y color por EV o resultado."):
+            cv1,cv2=st.columns(2)
+            with cv1: sv=st.radio("Vista",["🖼️ Pro","🔍 Interactivo"],key="hit_spray_view",horizontal=True)
+            with cv2: sc=st.radio("Color",["Exit Velocity","Resultado"],key="hit_spray_color",horizontal=True)
+            cb="ev" if sc=="Exit Velocity" else "result"
+            pts=spray_points(bdf)
+            if sv=="🖼️ Pro":
+                png=render_spray_png(pts,selected,color_by=cb)
+                if png:
+                    pcol,scol=st.columns([1,3.2])
+                    with pcol: st.markdown(bb_panel_html(selected,summ),unsafe_allow_html=True)
+                    with scol: st.image(png,use_container_width=True)
+                else: st.info("Sin datos de spray (Distance/Bearing).")
+            else:
+                st.plotly_chart(vhit.spray_interactive(pts,selected,color_by=cb),use_container_width=True)
+        with viz_card("DAMAGE ZONE","Dónde le pegan más duro","EV por ubicación del pitcheo en la zona de strike."):
+            st.plotly_chart(vhit.damage_zone(bdf,selected),use_container_width=True)
     with tab5:
         cl2,cr2=st.columns(2)
-        with cl2: st.plotly_chart(vhit.ev_distribution(bdf,selected),use_container_width=True)
-        with cr2: st.plotly_chart(vhit.la_distribution(bdf,selected),use_container_width=True)
-        st.markdown("<br>",unsafe_allow_html=True)
-        st.plotly_chart(vhit.ev_la_scatter(bdf,selected),use_container_width=True)
+        with cl2:
+            with viz_card("EXIT VELOCITY","Distribución de EV","Histograma de Exit Velocity; línea de Hard Hit (95)."):
+                st.plotly_chart(vhit.ev_distribution(bdf,selected),use_container_width=True)
+        with cr2:
+            with viz_card("LAUNCH ANGLE","Distribución de LA","Histograma de Launch Angle; sweet-spot 8–32°."):
+                st.plotly_chart(vhit.la_distribution(bdf,selected),use_container_width=True)
+        with viz_card("HIT QUALITY MAP","Exit Velocity × Launch Angle","Cada batazo por EV y LA, con la zona barrel."):
+            st.plotly_chart(vhit.ev_la_scatter(bdf,selected),use_container_width=True)
     with tab6:
         st.info("Stadium analysis coming soon.")
     st.markdown('<div class="sh">📤 Export</div>',unsafe_allow_html=True)
