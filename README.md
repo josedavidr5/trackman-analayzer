@@ -55,6 +55,16 @@ El selector Pro / College / High School / Mixed ajusta todos los umbrales (Hard 
 
 Paquete independiente con motor físico de trayectorias release→plato, validación de rangos físicos, analítica (movement profile, release consistency, tendencias velo/spin) y API Flask documentada para integraciones externas. Ver `trajectory/README.md`. En el app: modo **🎯 Trayectorias 3D** con vista animada detrás del catcher (play/pausa + slider de frames), superposición de pitches, comparación de dos pitchers lado a lado, heatmaps por tipo y conteo, break chart, consistencia de release y tendencias por outing. Export: HTML interactivo y GIF vista-catcher. Tests: `pytest trajectory/tests/` (18 tests).
 
+## Changelog v4.14
+
+- 🃏 **Tarjetas en toda la app.** El look de tarjetas (`viz_card`: etiqueta mono + título +
+  descripción, en `st.container(border=True)`) que estrenó Hitting ahora envuelve también **Pitching**
+  (Summary → "ARSENAL — STUFF"/"DISCIPLINA", Location → "UBICACIÓN"/"POR TIPO DE PITCHEO",
+  Trends → "TENDENCIA DE VELOCIDAD"/"USO POR CONTEO", "WHIFF% / CSW% POR ZONA"), **League**
+  ("PROMEDIOS DE LIGA — PITCHING/— HITTING") y **Top Plays** ("LEADERBOARD" y "TARJETA PARA REDES").
+- ✨ **App visualmente consistente**: se reemplazaron los encabezados `<div class="sh">` sueltos por
+  la cabecera de tarjeta. Solo presentación — sin cambios de analítica, gráficos ni tema.
+
 ## Changelog v4.13
 
 - 🎨 **Tema fijado a claro** (`.streamlit/config.toml`): la app ya no sigue el modo del sistema del
