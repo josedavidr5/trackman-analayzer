@@ -1432,22 +1432,23 @@ def render_hitting(df, master_df, lmeta):
         "📅 Monthly","🔄 Splits","📋 Results","🗺️ Spray","📊 Distributions","🏟️ Stadium"])
     with tab1:
         monthly_df=build_hitting_monthly(bdf,lmeta)
-        if monthly_df.empty: st.info("No monthly data.")
-        else:
-            st.dataframe(monthly_df,use_container_width=True,hide_index=True)
-            csv_dl(monthly_df,f"{selected}_monthly.csv")
-        st.markdown("<br>",unsafe_allow_html=True)
-        st.plotly_chart(vhit.rolling_ev(bdf,selected),use_container_width=True)
+        with viz_card("PROGRESIÓN MENSUAL","Mes a mes","EV/LA/distancia, HH%, Barrel%, K/BB y wOBA por mes."):
+            if monthly_df.empty: st.info("No monthly data.")
+            else:
+                st.dataframe(monthly_df,use_container_width=True,hide_index=True)
+                csv_dl(monthly_df,f"{selected}_monthly.csv")
+        with viz_card("ROLLING EV","Tendencia de Exit Velocity","Media móvil de EV por batazo (cronológico)."):
+            st.plotly_chart(vhit.rolling_ev(bdf,selected),use_container_width=True)
     with tab2:
-        st.markdown('<div class="sh">vs RHP / LHP</div>',unsafe_allow_html=True)
         split_df=build_split_table(bdf,ev_hard=EV_HARD)
-        if split_df.empty: st.info("PitcherThrows column required.")
-        else:
-            st.dataframe(split_df,use_container_width=True,hide_index=True)
-            csv_dl(split_df,f"{selected}_splits.csv")
-            hands=bdf["PitcherThrows"].dropna().unique() if "PitcherThrows" in bdf.columns else []
-            if len(hands)>=2:
-                st.markdown('<div class="sh">Spray by Pitcher Hand</div>',unsafe_allow_html=True)
+        with viz_card("SPLITS vs RHP/LHP","Rendimiento por mano del pitcher","EV, HH%, disciplina y wOBA vs derechos e izquierdos."):
+            if split_df.empty: st.info("PitcherThrows column required.")
+            else:
+                st.dataframe(split_df,use_container_width=True,hide_index=True)
+                csv_dl(split_df,f"{selected}_splits.csv")
+        hands=bdf["PitcherThrows"].dropna().unique() if "PitcherThrows" in bdf.columns else []
+        if len(hands)>=2:
+            with viz_card("SPRAY POR MANO","Dónde caen los batazos por mano","Spray chart contra cada mano del pitcher."):
                 cols_h=st.columns(len(hands))
                 for col_h,hand in zip(cols_h,sorted(hands)):
                     with col_h:
@@ -1457,32 +1458,37 @@ def render_hitting(df, master_df, lmeta):
                         if png_h: st.image(png_h,use_container_width=True)
                         else: st.info("Sin datos de spray.")
     with tab3:
-        st.markdown('<div class="sh">Play Results</div>',unsafe_allow_html=True)
         result_df=build_play_result_table(bdf)
-        if result_df.empty: st.info("PlayResult column not found.")
-        else:
-            st.dataframe(result_df,use_container_width=True,hide_index=True)
-            csv_dl(result_df,f"{selected}_results.csv")
+        with viz_card("RESULTADOS DE JUGADA","Distribución de resultados","Conteo y % de PAs por resultado."):
+            if result_df.empty: st.info("PlayResult column not found.")
+            else:
+                st.dataframe(result_df,use_container_width=True,hide_index=True)
+                csv_dl(result_df,f"{selected}_results.csv")
     with tab4:
-        cv1,cv2=st.columns(2)
-        with cv1: sv=st.radio("Vista",["🖼️ Pro","🔍 Interactivo"],key="hit_spray_view",horizontal=True)
-        with cv2: sc=st.radio("Color",["Exit Velocity","Resultado"],key="hit_spray_color",horizontal=True)
-        cb="ev" if sc=="Exit Velocity" else "result"
-        pts=spray_points(bdf)
-        if sv=="🖼️ Pro":
-            png=render_spray_png(pts,summ,selected,color_by=cb)
-            if png: st.image(png,use_container_width=True)
-            else: st.info("Sin datos de spray (Distance/Bearing).")
-        else:
-            st.plotly_chart(vhit.spray_interactive(pts,selected,color_by=cb),use_container_width=True)
-        st.markdown('<div class="sh">Damage Zone</div>',unsafe_allow_html=True)
-        st.plotly_chart(vhit.damage_zone(bdf,selected),use_container_width=True)
+        with viz_card("SPRAY CHART","Dónde caen los batazos","Campo top-down; toggle Pro/Interactivo y color por EV o resultado."):
+            cv1,cv2=st.columns(2)
+            with cv1: sv=st.radio("Vista",["🖼️ Pro","🔍 Interactivo"],key="hit_spray_view",horizontal=True)
+            with cv2: sc=st.radio("Color",["Exit Velocity","Resultado"],key="hit_spray_color",horizontal=True)
+            cb="ev" if sc=="Exit Velocity" else "result"
+            pts=spray_points(bdf)
+            if sv=="🖼️ Pro":
+                png=render_spray_png(pts,summ,selected,color_by=cb)
+                if png: st.image(png,use_container_width=True)
+                else: st.info("Sin datos de spray (Distance/Bearing).")
+            else:
+                st.plotly_chart(vhit.spray_interactive(pts,selected,color_by=cb),use_container_width=True)
+        with viz_card("DAMAGE ZONE","Dónde le pegan más duro","EV por ubicación del pitcheo en la zona de strike."):
+            st.plotly_chart(vhit.damage_zone(bdf,selected),use_container_width=True)
     with tab5:
         cl2,cr2=st.columns(2)
-        with cl2: st.plotly_chart(vhit.ev_distribution(bdf,selected),use_container_width=True)
-        with cr2: st.plotly_chart(vhit.la_distribution(bdf,selected),use_container_width=True)
-        st.markdown("<br>",unsafe_allow_html=True)
-        st.plotly_chart(vhit.ev_la_scatter(bdf,selected),use_container_width=True)
+        with cl2:
+            with viz_card("EXIT VELOCITY","Distribución de EV","Histograma de Exit Velocity; línea de Hard Hit (95)."):
+                st.plotly_chart(vhit.ev_distribution(bdf,selected),use_container_width=True)
+        with cr2:
+            with viz_card("LAUNCH ANGLE","Distribución de LA","Histograma de Launch Angle; sweet-spot 8–32°."):
+                st.plotly_chart(vhit.la_distribution(bdf,selected),use_container_width=True)
+        with viz_card("HIT QUALITY MAP","Exit Velocity × Launch Angle","Cada batazo por EV y LA, con la zona barrel."):
+            st.plotly_chart(vhit.ev_la_scatter(bdf,selected),use_container_width=True)
     with tab6:
         st.info("Stadium analysis coming soon.")
     st.markdown('<div class="sh">📤 Export</div>',unsafe_allow_html=True)
