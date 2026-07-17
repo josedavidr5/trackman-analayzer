@@ -26,9 +26,10 @@ def render_spray_png(points, summary, name, color_by="ev"):
     pts = points.get("points", []) if points else []
     if not pts:
         return None
-    fig = plt.figure(figsize=(9.5, 8.2), dpi=120)
+    fig = plt.figure(figsize=(10.5, 7.6), dpi=120)
     ax = fig.add_axes([0.0, 0.0, 1.0, 1.0]); ax.set_axis_off()
-    ax.set_xlim(-360, 360); ax.set_ylim(-40, 440); ax.set_aspect("equal")
+    # margen izquierdo dedicado para el panel (el campo va a la derecha del margen)
+    ax.set_xlim(-620, 360); ax.set_ylim(-40, 440); ax.set_aspect("equal")
     fx, fy, ft, fr = _fence_xy()
     # pasto (fan) con franjas de corte: cuñas radiales alternadas
     for i in range(len(ft) - 1):
