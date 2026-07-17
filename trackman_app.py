@@ -1140,10 +1140,9 @@ def render_top_plays(df, lmeta, tournament=""):
     if lb.empty:
         st.warning("No hay datos suficientes para esta pregunta con los filtros actuales.")
         return
-    st.markdown(f'<div class="sh">{meta["title"]}{" · "+area_label if area_label else ""} · {dr}</div>',
-                unsafe_allow_html=True)
-    st.dataframe(lb,use_container_width=True)
-    csv_dl(lb,"top_plays.csv")
+    with viz_card("LEADERBOARD", f'{meta["title"]}{" · "+area_label if area_label else ""}', dr):
+        st.dataframe(lb,use_container_width=True)
+        csv_dl(lb,"top_plays.csv")
     # ── Breakdown per region/stadium ──
     group_col="Region" if regions else "Stadium"
     if regions and stadiums:
@@ -1168,19 +1167,19 @@ def render_top_plays(df, lmeta, tournament=""):
                                    f"top_{intent}_{str(area).replace(' ','_')}.png","image/png",
                                    key=f"dl_area_{intent}_{area}")
     # ── Social card ──
-    st.markdown('<div class="sh">📱 Tarjeta para redes sociales</div>',unsafe_allow_html=True)
-    card_sub=dr+(f" · {area_label}" if area_label else "")
-    fig_card=make_social_card(lb,meta,card_sub,tournament)
-    cl,cr=st.columns([2,1])
-    with cl: st.pyplot(fig_card,use_container_width=True)
-    with cr:
-        st.caption("Imagen 1080×1080 lista para Instagram / X / Facebook.")
-        buf=io.BytesIO()
-        fig_card.savefig(buf,format="png",dpi=100,facecolor=fig_card.get_facecolor())
-        buf.seek(0)
-        st.download_button("⬇️ Descargar PNG",buf.read(),
-                           f"top_plays_{meta['value_col'].lower()}.png","image/png")
-    plt.close(fig_card)
+    with viz_card("TARJETA PARA REDES", "Contenido listo para compartir",
+                  "Imagen 1080×1080 para Instagram / X / Facebook."):
+        card_sub=dr+(f" · {area_label}" if area_label else "")
+        fig_card=make_social_card(lb,meta,card_sub,tournament)
+        cl,cr=st.columns([2,1])
+        with cl: st.pyplot(fig_card,use_container_width=True)
+        with cr:
+            buf=io.BytesIO()
+            fig_card.savefig(buf,format="png",dpi=100,facecolor=fig_card.get_facecolor())
+            buf.seek(0)
+            st.download_button("⬇️ Descargar PNG",buf.read(),
+                               f"top_plays_{meta['value_col'].lower()}.png","image/png")
+        plt.close(fig_card)
 
 # ══════════════════════════════════════════════════════════════════════════════
 # PDF EXPORT (fixed for matplotlib 3.8+)
@@ -1345,46 +1344,55 @@ def render_pitching(df, master_df, lmeta):
     tab1, tab2, tab3, tab4, tab5 = st.tabs(
         ["📋 Summary", "📍 Location", "📊 Trends", "🎯 Whiff/CSW", "🏟️ Stadium"])
     with tab1:
-        st.markdown('<div class="sh">🎯 Arsenal — Stuff</div>', unsafe_allow_html=True)
-        st.checkbox("Mostrar pitcheos individuales", value=True, key="arsenal_show_ind")
-        st.plotly_chart(fig_mov, use_container_width=True)
-        summary_df = arsenal_stuff(pf)
-        st.dataframe(summary_df, use_container_width=True, hide_index=True)
-        csv_dl(summary_df, f"{selected}_arsenal.csv")
-        st.markdown('<div class="sh">Discipline</div>', unsafe_allow_html=True)
-        disc_df = compute_pitch_discipline(pf)
-        if disc_df.empty:
-            st.info("PitchCall column required.")
-        else:
-            st.dataframe(disc_df, use_container_width=True, hide_index=True)
-            csv_dl(disc_df, f"{selected}_discipline.csv")
+        with viz_card("ARSENAL — STUFF", "Arsenal del pitcher",
+                      "Movimiento por tipo (hover: velo/spin/whiff/CSW) + tabla con CSW%."):
+            st.checkbox("Mostrar pitcheos individuales", value=True, key="arsenal_show_ind")
+            st.plotly_chart(fig_mov, use_container_width=True)
+            summary_df = arsenal_stuff(pf)
+            st.dataframe(summary_df, use_container_width=True, hide_index=True)
+            csv_dl(summary_df, f"{selected}_arsenal.csv")
+        with viz_card("DISCIPLINA", "Zona, swing y contacto",
+                      "Zone%, Swing%, Contact%, Chase%, Whiff% por tipo."):
+            disc_df = compute_pitch_discipline(pf)
+            if disc_df.empty:
+                st.info("PitchCall column required.")
+            else:
+                st.dataframe(disc_df, use_container_width=True, hide_index=True)
+                csv_dl(disc_df, f"{selected}_discipline.csv")
     with tab2:
-        cl, cr = st.columns(2)
-        with cl: st.plotly_chart(fig_loc, use_container_width=True)
-        with cr: st.plotly_chart(fig_kde, use_container_width=True)
-        st.markdown('<div class="sh">Location by Pitch Type</div>', unsafe_allow_html=True)
-        st.plotly_chart(vpitch.location_by_pitch(pf, selected), use_container_width=True)
+        with viz_card("UBICACIÓN", "Dónde ubica sus pitcheos",
+                      "Ubicaciones y densidad (hot zone) sobre la zona de strike."):
+            cl, cr = st.columns(2)
+            with cl: st.plotly_chart(fig_loc, use_container_width=True)
+            with cr: st.plotly_chart(fig_kde, use_container_width=True)
+        with viz_card("POR TIPO DE PITCHEO", "Ubicación por tipo",
+                      "Un panel de ubicación por cada tipo de pitcheo."):
+            st.plotly_chart(vpitch.location_by_pitch(pf, selected), use_container_width=True)
     with tab3:
-        st.plotly_chart(fig_vel, use_container_width=True)
-        st.markdown("<br>", unsafe_allow_html=True)
-        st.plotly_chart(vpitch.usage_heatmap(build_usage_by_count(pf), selected),
-                        use_container_width=True)
+        with viz_card("TENDENCIA DE VELOCIDAD", "Velo en el tiempo",
+                      "Exit velocity por fecha, por tipo de pitcheo."):
+            st.plotly_chart(fig_vel, use_container_width=True)
+        with viz_card("USO POR CONTEO", "Qué lanza en cada conteo",
+                      "Heatmap de uso % por tipo de pitcheo y conteo (bolas-strikes)."):
+            st.plotly_chart(vpitch.usage_heatmap(build_usage_by_count(pf), selected),
+                            use_container_width=True)
     with tab4:
-        st.markdown('<div class="sh">🎯 Whiff% / CSW% por zona</div>', unsafe_allow_html=True)
-        ptypes = ["Todos"] + sorted(pf["TaggedPitchType"].dropna().unique().tolist())
-        cq1, cq2 = st.columns([2, 3])
-        with cq1:
-            sel_pt = st.selectbox("Tipo de pitcheo", ptypes, key="whiffcsw_ptype")
-        with cq2:
-            sel_metric = st.radio("Métrica", ["Whiff %", "CSW %"], key="whiffcsw_metric",
-                                  horizontal=True)
-        sub = pf if sel_pt == "Todos" else pf[pf["TaggedPitchType"] == sel_pt]
-        grid = whiff_csw_zone_grid(sub)
-        metric = "whiff" if sel_metric == "Whiff %" else "csw"
-        st.plotly_chart(vpitch.zone_rate_heatmap(grid, metric, f"{selected} · {sel_pt}"),
-                        use_container_width=True)
-        st.caption(f"{grid['total_pitches']} pitcheos con ubicación · "
-                   "celdas con muestra baja (Whiff <4 swings / CSW <5 pitcheos) en gris con solo el conteo.")
+        with viz_card("WHIFF% / CSW% POR ZONA", "Dónde consigue sus misses",
+                      "Grid por zona; selector de tipo de pitcheo y toggle Whiff/CSW."):
+            ptypes = ["Todos"] + sorted(pf["TaggedPitchType"].dropna().unique().tolist())
+            cq1, cq2 = st.columns([2, 3])
+            with cq1:
+                sel_pt = st.selectbox("Tipo de pitcheo", ptypes, key="whiffcsw_ptype")
+            with cq2:
+                sel_metric = st.radio("Métrica", ["Whiff %", "CSW %"], key="whiffcsw_metric",
+                                      horizontal=True)
+            sub = pf if sel_pt == "Todos" else pf[pf["TaggedPitchType"] == sel_pt]
+            grid = whiff_csw_zone_grid(sub)
+            metric = "whiff" if sel_metric == "Whiff %" else "csw"
+            st.plotly_chart(vpitch.zone_rate_heatmap(grid, metric, f"{selected} · {sel_pt}"),
+                            use_container_width=True)
+            st.caption(f"{grid['total_pitches']} pitcheos con ubicación · "
+                       "celdas con muestra baja (Whiff <4 swings / CSW <5 pitcheos) en gris con solo el conteo.")
     with tab5:
         st.info("Stadium analysis coming soon.")
     st.markdown('<div class="sh">📤 Export</div>', unsafe_allow_html=True)
@@ -1538,19 +1546,21 @@ def render_league(df, lmeta):
     with tab_l1:
         c1,c2=st.columns(2)
         with c1:
-            st.markdown('<div class="sh">⚾ Pitching</div>',unsafe_allow_html=True)
-            lp=build_league_pitching_avg(df)
-            if lp.empty: st.info("Insufficient data.")
-            else:
-                st.dataframe(lp,use_container_width=True,hide_index=True)
-                csv_dl(lp,"league_pitching.csv")
+            with viz_card("PROMEDIOS DE LIGA — PITCHING", "Arsenal de la liga",
+                          "Velo, spin y movimiento promedio por tipo de pitcheo."):
+                lp=build_league_pitching_avg(df)
+                if lp.empty: st.info("Insufficient data.")
+                else:
+                    st.dataframe(lp,use_container_width=True,hide_index=True)
+                    csv_dl(lp,"league_pitching.csv")
         with c2:
-            st.markdown('<div class="sh">🏏 Hitting</div>',unsafe_allow_html=True)
-            lh=build_league_hitting_avg(df,lmeta)
-            if lh.empty: st.info("Insufficient data.")
-            else:
-                st.dataframe(lh,use_container_width=True,hide_index=True)
-                csv_dl(lh,"league_hitting.csv")
+            with viz_card("PROMEDIOS DE LIGA — HITTING", "Bateo de la liga",
+                          "EV, LA, HH%, Barrel%, K/BB y wOBA promedio."):
+                lh=build_league_hitting_avg(df,lmeta)
+                if lh.empty: st.info("Insufficient data.")
+                else:
+                    st.dataframe(lh,use_container_width=True,hide_index=True)
+                    csv_dl(lh,"league_hitting.csv")
     with tab_l2:
         if "Stadium" not in df.columns:
             st.info("No 'Stadium' column found.")
