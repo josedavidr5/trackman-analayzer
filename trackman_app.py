@@ -1140,10 +1140,9 @@ def render_top_plays(df, lmeta, tournament=""):
     if lb.empty:
         st.warning("No hay datos suficientes para esta pregunta con los filtros actuales.")
         return
-    st.markdown(f'<div class="sh">{meta["title"]}{" · "+area_label if area_label else ""} · {dr}</div>',
-                unsafe_allow_html=True)
-    st.dataframe(lb,use_container_width=True)
-    csv_dl(lb,"top_plays.csv")
+    with viz_card("LEADERBOARD", f'{meta["title"]}{" · "+area_label if area_label else ""}', dr):
+        st.dataframe(lb,use_container_width=True)
+        csv_dl(lb,"top_plays.csv")
     # ── Breakdown per region/stadium ──
     group_col="Region" if regions else "Stadium"
     if regions and stadiums:
@@ -1168,19 +1167,19 @@ def render_top_plays(df, lmeta, tournament=""):
                                    f"top_{intent}_{str(area).replace(' ','_')}.png","image/png",
                                    key=f"dl_area_{intent}_{area}")
     # ── Social card ──
-    st.markdown('<div class="sh">📱 Tarjeta para redes sociales</div>',unsafe_allow_html=True)
-    card_sub=dr+(f" · {area_label}" if area_label else "")
-    fig_card=make_social_card(lb,meta,card_sub,tournament)
-    cl,cr=st.columns([2,1])
-    with cl: st.pyplot(fig_card,use_container_width=True)
-    with cr:
-        st.caption("Imagen 1080×1080 lista para Instagram / X / Facebook.")
-        buf=io.BytesIO()
-        fig_card.savefig(buf,format="png",dpi=100,facecolor=fig_card.get_facecolor())
-        buf.seek(0)
-        st.download_button("⬇️ Descargar PNG",buf.read(),
-                           f"top_plays_{meta['value_col'].lower()}.png","image/png")
-    plt.close(fig_card)
+    with viz_card("TARJETA PARA REDES", "Contenido listo para compartir",
+                  "Imagen 1080×1080 para Instagram / X / Facebook."):
+        card_sub=dr+(f" · {area_label}" if area_label else "")
+        fig_card=make_social_card(lb,meta,card_sub,tournament)
+        cl,cr=st.columns([2,1])
+        with cl: st.pyplot(fig_card,use_container_width=True)
+        with cr:
+            buf=io.BytesIO()
+            fig_card.savefig(buf,format="png",dpi=100,facecolor=fig_card.get_facecolor())
+            buf.seek(0)
+            st.download_button("⬇️ Descargar PNG",buf.read(),
+                               f"top_plays_{meta['value_col'].lower()}.png","image/png")
+        plt.close(fig_card)
 
 # ══════════════════════════════════════════════════════════════════════════════
 # PDF EXPORT (fixed for matplotlib 3.8+)
@@ -1547,19 +1546,21 @@ def render_league(df, lmeta):
     with tab_l1:
         c1,c2=st.columns(2)
         with c1:
-            st.markdown('<div class="sh">⚾ Pitching</div>',unsafe_allow_html=True)
-            lp=build_league_pitching_avg(df)
-            if lp.empty: st.info("Insufficient data.")
-            else:
-                st.dataframe(lp,use_container_width=True,hide_index=True)
-                csv_dl(lp,"league_pitching.csv")
+            with viz_card("PROMEDIOS DE LIGA — PITCHING", "Arsenal de la liga",
+                          "Velo, spin y movimiento promedio por tipo de pitcheo."):
+                lp=build_league_pitching_avg(df)
+                if lp.empty: st.info("Insufficient data.")
+                else:
+                    st.dataframe(lp,use_container_width=True,hide_index=True)
+                    csv_dl(lp,"league_pitching.csv")
         with c2:
-            st.markdown('<div class="sh">🏏 Hitting</div>',unsafe_allow_html=True)
-            lh=build_league_hitting_avg(df,lmeta)
-            if lh.empty: st.info("Insufficient data.")
-            else:
-                st.dataframe(lh,use_container_width=True,hide_index=True)
-                csv_dl(lh,"league_hitting.csv")
+            with viz_card("PROMEDIOS DE LIGA — HITTING", "Bateo de la liga",
+                          "EV, LA, HH%, Barrel%, K/BB y wOBA promedio."):
+                lh=build_league_hitting_avg(df,lmeta)
+                if lh.empty: st.info("Insufficient data.")
+                else:
+                    st.dataframe(lh,use_container_width=True,hide_index=True)
+                    csv_dl(lh,"league_hitting.csv")
     with tab_l2:
         if "Stadium" not in df.columns:
             st.info("No 'Stadium' column found.")
