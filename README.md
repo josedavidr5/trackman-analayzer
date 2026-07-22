@@ -55,6 +55,20 @@ El selector Pro / College / High School / Mixed ajusta todos los umbrales (Hard 
 
 Paquete independiente con motor físico de trayectorias release→plato, validación de rangos físicos, analítica (movement profile, release consistency, tendencias velo/spin) y API Flask documentada para integraciones externas. Ver `trajectory/README.md`. En el app: modo **🎯 Trayectorias 3D** con vista animada detrás del catcher (play/pausa + slider de frames), superposición de pitches, comparación de dos pitchers lado a lado, heatmaps por tipo y conteo, break chart, consistencia de release y tendencias por outing. Export: HTML interactivo y GIF vista-catcher. Tests: `pytest trajectory/tests/` (18 tests).
 
+## Changelog v4.15
+
+- 🧠 **Capa evaluativa — stats esperados (`core/expected.py`).** El sistema deja de solo describir
+  *qué pasó* y empieza a medir *qué tan bueno fue*: **xwOBA / xBA / xSLG** por batazo y por PA desde
+  EV+ángulo, quitando suerte y defensa.
+- 🔀 **Modelo híbrido MLB + tu liga.** Superficie EV×ángulo → probabilidad de out/1B/2B/3B/HR: base
+  MLB paramétrica (anclada a barrel/promedio/débil/popup) recalibrada hacia tu liga por *shrinkage*
+  bayesiano cuando hay ≥500 batazos cargados. La UI indica si el modelo está recalibrado o es base MLB.
+- 🏏 **Hitting**: tarjeta **VALOR ESPERADO** (xwOBA/xBA/xSLG + `wOBA − xwOBA` = sobre/sub-rendimiento).
+- ⚾ **Pitching**: **xwOBA-contra** total y por tipo de pitcheo (qué pitcheo suprime más valor — base de un futuro Stuff+).
+- 📊 **League**: fila **xwOBA** en el benchmark de bateo.
+- Reusa `WOBA_W`/`count_pa`/`batted_ball_mask`/`compute_woba` de `core/metrics.py` para que el xwOBA
+  sea consistente con el wOBA. 16 tests nuevos (anclas, monotonía, PA, shrinkage). Fase B (run value) pendiente.
+
 ## Changelog v4.14
 
 - 🃏 **Tarjetas en toda la app.** El look de tarjetas (`viz_card`: etiqueta mono + título +
