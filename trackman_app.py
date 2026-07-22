@@ -842,6 +842,7 @@ def build_league_hitting_avg(df, lmeta=None):
         {"Metric":"K % (per PA)","League":f"{safe_pct(kk,pa)}%","Median":"—","Max":"—"},
         {"Metric":"BB % (per PA)","League":f"{safe_pct(bb,pa)}%","Median":"—","Max":"—"},
         {"Metric":"wOBA","League":fmt(compute_woba(df),"",3),"Median":"—","Max":"—"},
+        {"Metric":"xwOBA","League":fmt(xwoba_pa(df),"",3),"Median":"—","Max":"—"},
     ]
     return pd.DataFrame(rows)
 
@@ -1380,6 +1381,16 @@ def render_pitching(df, master_df, lmeta):
             else:
                 st.dataframe(disc_df, use_container_width=True, hide_index=True)
                 csv_dl(disc_df, f"{selected}_discipline.csv")
+        with viz_card("VALOR ESPERADO CONTRA", "xwOBA-contra por tipo de pitcheo",
+                      "Calidad de contacto esperada que permite cada pitcheo (menor = mejor)."):
+            xgrid = get_expected_grid(master_df, _grid_key(master_df))
+            st.metric("xwOBA-contra (total)", fmt(xwoba_pa(pf, xgrid), "", 3))
+            xw_tbl = xwoba_against_by_pitch(pf, xgrid)
+            if xw_tbl.empty:
+                st.info("Sin batazos con EV/ángulo para estimar valor.")
+            else:
+                st.dataframe(xw_tbl, use_container_width=True, hide_index=True)
+            st.caption(_xgrid_note(xgrid))
     with tab2:
         with viz_card("UBICACIÓN", "Dónde ubica sus pitcheos",
                       "Ubicaciones y densidad (hot zone) sobre la zona de strike."):
