@@ -126,3 +126,19 @@ def hybrid_outcome_probs(ev, la, grid):
         return base
     p_emp = c / n
     return (n * p_emp + SHRINK_K * base) / (n + SHRINK_K)
+
+
+def xwoba_against_by_pitch(df, grid=None):
+    """xwOBACON contra por tipo de pitcheo (solo batazos), ascendente. Pitch/xwOBAcon/BBE."""
+    cols = ["Pitch", "xwOBAcon", "BBE"]
+    if "TaggedPitchType" not in df.columns:
+        return pd.DataFrame(columns=cols)
+    rows = []
+    for pt, g in df.groupby("TaggedPitchType"):
+        xbb = expected_batted_balls(g, grid)
+        if xbb.empty:
+            continue
+        rows.append({"Pitch": pt, "xwOBAcon": round(float(xbb["xwoba"].mean()), 3),
+                     "BBE": int(len(xbb))})
+    return (pd.DataFrame(rows).sort_values("xwOBAcon").reset_index(drop=True)
+            if rows else pd.DataFrame(columns=cols))

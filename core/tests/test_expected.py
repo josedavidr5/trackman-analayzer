@@ -95,3 +95,18 @@ def test_empirical_grid_below_threshold_not_recalibrated():
         "ExitSpeed": [90.0] * 10, "Angle": [12.0] * 10,
     })
     assert ex.empirical_grid(df)["recalibrated"] is False
+
+
+def test_xwoba_against_by_pitch():
+    df = pd.DataFrame({
+        "TaggedPitchType": ["Slider", "Slider", "Fastball"],
+        "PitchCall": ["InPlay", "InPlay", "InPlay"],
+        "PlayResult": ["Out", "Out", "HR"],
+        "ExitSpeed": [70.0, 72.0, 104.0],
+        "Angle": [-5.0, 2.0, 27.0],
+    })
+    t = ex.xwoba_against_by_pitch(df)
+    assert set(t.columns) == {"Pitch", "xwOBAcon", "BBE"}
+    fb = t.loc[t["Pitch"] == "Fastball", "xwOBAcon"].iloc[0]
+    sl = t.loc[t["Pitch"] == "Slider", "xwOBAcon"].iloc[0]
+    assert fb > sl

@@ -55,6 +55,8 @@ from core.pitching import pitch_discipline as compute_pitch_discipline
 from core.hitting import (build_play_result_table, compute_plate_discipline_batter,
                           build_split_table, build_hitting_monthly,
                           spray_points, hitting_summary)
+from core.expected import (empirical_grid, expected_summary, xwoba_pa,
+                           xwoba_against_by_pitch)
 from viz import pitching as vpitch
 from viz import hitting as vhit
 from viz.spray_render import render_spray_png
@@ -1297,6 +1299,25 @@ def export_hitting_pdf(batter, monthly_df, disc_dict, result_df, split_df, fig_s
     buf.seek(0); return buf.read()
 
 # ══════════════════════════════════════════════════════════════════════════════
+# EXPECTED STATS — grid híbrido cacheado por dataset
+# ══════════════════════════════════════════════════════════════════════════════
+@st.cache_data(show_spinner=False)
+def get_expected_grid(_df, cache_key):
+    return empirical_grid(_df)
+
+
+def _grid_key(master):
+    return (len(master), round(float(master["ExitSpeed"].sum()), 1)
+            if "ExitSpeed" in master.columns and master["ExitSpeed"].notna().any() else 0)
+
+
+def _xgrid_note(xgrid):
+    return (f"Modelo recalibrado con tu liga · {xgrid['n']} batazos"
+            if xgrid.get("recalibrated")
+            else f"Modelo base MLB · tu liga: {xgrid['n']} batazos (≥500 para recalibrar)")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 # RENDER: PITCHING
 # ══════════════════════════════════════════════════════════════════════════════
 def render_pitching(df, master_df, lmeta):
@@ -1435,6 +1456,21 @@ def render_hitting(df, master_df, lmeta):
     with c5: st.metric("Barrel %",f"{summ['barrel_pct']:.1f}%")
     with c6: st.metric("wOBA",fmt(summ['woba'],"",3))
     with c7: st.metric("Dates",str(bdf["Date"].dt.date.nunique()) if "Date" in bdf.columns else "—")
+    st.markdown("<br>",unsafe_allow_html=True)
+    xgrid = get_expected_grid(master_df, _grid_key(master_df))
+    esum = expected_summary(bdf, xgrid)
+    with viz_card("VALOR ESPERADO", "xwOBA / xBA / xSLG",
+                  "Calidad de contacto esperada (EV+ángulo) vs resultado real — quita suerte y defensa."):
+        e1, e2, e3, e4 = st.columns(4)
+        with e1: st.metric("xwOBA", fmt(esum["xwoba"], "", 3))
+        with e2: st.metric("xBA", fmt(esum["xba"], "", 3))
+        with e3: st.metric("xSLG", fmt(esum["xslg"], "", 3))
+        with e4:
+            d = esum["woba_minus_xwoba"]
+            st.metric("wOBA − xwOBA", fmt(d, "", 3),
+                      delta=("sobre-rinde" if d and d > 0 else "sub-rinde" if d else None),
+                      delta_color="off")
+        st.caption(_xgrid_note(xgrid))
     st.markdown("<br>",unsafe_allow_html=True)
     if disc:
         st.markdown('<div class="sh">🎯 Plate Discipline</div>',unsafe_allow_html=True)
