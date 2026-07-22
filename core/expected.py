@@ -43,3 +43,49 @@ def xwoba_contact(ev, la, grid=None):
         return np.nan
     p = hybrid_outcome_probs(ev, la, grid) if grid else base_outcome_probs(ev, la)
     return float(p @ _OUT_W)
+
+
+def expected_batted_balls(df, grid=None):
+    """xwoba/xba/xslg por batazo (filas InPlay con EV+ángulo)."""
+    cols = ["xwoba", "xba", "xslg"]
+    if not {"ExitSpeed", "Angle"}.issubset(df.columns):
+        return pd.DataFrame(columns=cols)
+    bip = batted_ball_mask(df)
+    sub = df.loc[bip, ["ExitSpeed", "Angle"]].dropna()
+    rows = []
+    for ev, la in zip(sub["ExitSpeed"], sub["Angle"]):
+        p = hybrid_outcome_probs(ev, la, grid) if grid else base_outcome_probs(ev, la)
+        rows.append((float(p @ _OUT_W), float(p[1:].sum()), float(p @ _SLG_W)))
+    return pd.DataFrame(rows, columns=cols, index=sub.index)
+
+
+def xwoba_pa(df, grid=None):
+    """xwOBA por PA: batazos esperados + K/BB/HBP reales; espeja compute_woba."""
+    pa = count_pa(df)
+    if pa == 0:
+        return np.nan
+    xbb = expected_batted_balls(df, grid)
+    num = float(xbb["xwoba"].sum()) if not xbb.empty else 0.0
+    if "PlayResult" in df.columns:
+        pr = df["PlayResult"].astype(str)
+        for res in ("BB", "HBP"):
+            num += WOBA_W[res] * int(pr.eq(res).sum())
+        denom = pa - int(pr.eq("SacBunt").sum())
+    else:
+        denom = pa
+    return round(num / denom, 3) if denom > 0 else np.nan
+
+
+def expected_summary(df, grid=None):
+    xbb = expected_batted_balls(df, grid)
+    woba = compute_woba(df)
+    xw = xwoba_pa(df, grid)
+    n_bip = int(len(xbb))
+    return {
+        "xwoba": float(xw) if pd.notna(xw) else None,
+        "xba": float(xbb["xba"].mean()) if n_bip else None,
+        "xslg": float(xbb["xslg"].mean()) if n_bip else None,
+        "woba": float(woba) if pd.notna(woba) else None,
+        "woba_minus_xwoba": (float(woba) - float(xw)) if pd.notna(woba) and pd.notna(xw) else None,
+        "n_bip": n_bip,
+    }

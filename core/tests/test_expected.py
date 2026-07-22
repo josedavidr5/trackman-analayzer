@@ -31,3 +31,39 @@ def test_monotonic_ev_in_line_band():
 
 def test_popup_worse_than_line_same_ev():
     assert ex.xwoba_contact(95, 50) < ex.xwoba_contact(95, 15)
+
+
+def _bb_df():
+    # 3 batazos (2 buenos, 1 débil) + 1 K + 1 BB → PA=5
+    return pd.DataFrame({
+        "PitchCall": ["InPlay", "InPlay", "InPlay", "StrikeSwinging", "BallCalled"],
+        "PlayResult": ["2B", "Out", "Out", "K", "BB"],
+        "ExitSpeed": [100.0, 95.0, 70.0, np.nan, np.nan],
+        "Angle":     [28.0, 15.0, -5.0, np.nan, np.nan],
+    })
+
+
+def test_expected_batted_balls_shape():
+    xbb = ex.expected_batted_balls(_bb_df())
+    assert list(xbb.columns) == ["xwoba", "xba", "xslg"]
+    assert len(xbb) == 3
+    assert (xbb["xba"].between(0, 1)).all()
+
+
+def test_xwoba_pa_uses_expected_plus_actual_bb():
+    df = _bb_df()
+    xw = ex.xwoba_pa(df)
+    # denom = PA(5) - SacBunt(0) = 5 ; num = Σxwoba(3 batazos) + WOBA_W['BB']
+    xbb = ex.expected_batted_balls(df)
+    expected = round((xbb["xwoba"].sum() + ex.WOBA_W["BB"]) / 5, 3)
+    assert xw == expected
+
+
+def test_xwoba_pa_nan_without_pa():
+    assert pd.isna(ex.xwoba_pa(pd.DataFrame({"ExitSpeed": [], "Angle": []})))
+
+
+def test_expected_summary_keys():
+    s = ex.expected_summary(_bb_df())
+    assert set(s) >= {"xwoba", "xba", "xslg", "woba", "woba_minus_xwoba", "n_bip"}
+    assert s["n_bip"] == 3
