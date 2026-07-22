@@ -89,3 +89,40 @@ def expected_summary(df, grid=None):
         "woba_minus_xwoba": (float(woba) - float(xw)) if pd.notna(woba) and pd.notna(xw) else None,
         "n_bip": n_bip,
     }
+
+
+_BIP_CLASS = {"1B": 1, "2B": 2, "3B": 3, "HR": 4}   # otros BIP → 0 (out)
+
+
+def _bin_idx(ev, la):
+    ei = int(np.clip((float(ev) - EV_LO) // EV_BIN, 0, (EV_HI - EV_LO) / EV_BIN - 1))
+    li = int(np.clip((float(la) - LA_LO) // LA_BIN, 0, (LA_HI - LA_LO) / LA_BIN - 1))
+    return ei, li
+
+
+def empirical_grid(df):
+    """{(ei,li): (counts[5], n)} desde los batazos del dataset + total y flag."""
+    cells = {}
+    total = 0
+    if not {"ExitSpeed", "Angle", "PlayResult"}.issubset(df.columns):
+        return {"cells": cells, "n": 0, "recalibrated": False}
+    bip = batted_ball_mask(df)
+    sub = df.loc[bip, ["ExitSpeed", "Angle", "PlayResult"]].dropna(subset=["ExitSpeed", "Angle"])
+    for ev, la, res in zip(sub["ExitSpeed"], sub["Angle"], sub["PlayResult"].astype(str)):
+        key = _bin_idx(ev, la)
+        c, n = cells.get(key, (np.zeros(5), 0))
+        c = c.copy(); c[_BIP_CLASS.get(res, 0)] += 1
+        cells[key] = (c, n + 1)
+        total += 1
+    return {"cells": cells, "n": total, "recalibrated": total >= RECAL_MIN_BB}
+
+
+def hybrid_outcome_probs(ev, la, grid):
+    base = base_outcome_probs(ev, la)
+    if not grid or not grid.get("cells"):
+        return base
+    c, n = grid["cells"].get(_bin_idx(ev, la), (np.zeros(5), 0))
+    if n == 0:
+        return base
+    p_emp = c / n
+    return (n * p_emp + SHRINK_K * base) / (n + SHRINK_K)

@@ -67,3 +67,31 @@ def test_expected_summary_keys():
     s = ex.expected_summary(_bb_df())
     assert set(s) >= {"xwoba", "xba", "xslg", "woba", "woba_minus_xwoba", "n_bip"}
     assert s["n_bip"] == 3
+
+
+def test_hybrid_n0_equals_base():
+    empty = {"cells": {}, "n": 0, "recalibrated": False}
+    p = ex.hybrid_outcome_probs(95, 15, empty)
+    assert np.allclose(p, ex.base_outcome_probs(95, 15))
+
+
+def test_hybrid_large_n_tends_empirical():
+    # celda EV~95/LA~15 con 5000 batazos, todos HR
+    df = pd.DataFrame({
+        "PitchCall": ["InPlay"] * 5000,
+        "PlayResult": ["HR"] * 5000,
+        "ExitSpeed": [95.0] * 5000,
+        "Angle": [15.0] * 5000,
+    })
+    grid = ex.empirical_grid(df)
+    assert grid["recalibrated"] is True
+    p = ex.hybrid_outcome_probs(95, 15, grid)
+    assert p[4] > 0.9   # domina el empírico (HR)
+
+
+def test_empirical_grid_below_threshold_not_recalibrated():
+    df = pd.DataFrame({
+        "PitchCall": ["InPlay"] * 10, "PlayResult": ["1B"] * 10,
+        "ExitSpeed": [90.0] * 10, "Angle": [12.0] * 10,
+    })
+    assert ex.empirical_grid(df)["recalibrated"] is False
